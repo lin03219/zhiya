@@ -1,4 +1,4 @@
-﻿"""
+"""
 配置管理模块
 负责 API 密钥、代理设置、网络切换的持久化存储
 """
@@ -37,6 +37,7 @@ class AppConfig:
     network: str = "mainnet"           # mainnet / testnet
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    borrow_rate: float = 2.5           # 借币请求间隔（秒）
 
     BYBIT_MAINNET = "https://api.bybit.com"
     BYBIT_TESTNET = "https://api-testnet.bybit.com"
@@ -97,6 +98,7 @@ class ConfigManager:
                 feishu_webhook=notify_data.get("feishu_webhook", ""),
                 dingtalk_webhook=notify_data.get("dingtalk_webhook", ""),
             )
+            self._config.borrow_rate = float(data.get("borrow_rate", 2.5))
         except Exception:
             pass
         return self._config
@@ -109,6 +111,7 @@ class ConfigManager:
             "network": self._config.network,
             "proxy": asdict(self._config.proxy),
             "notify": asdict(self._config.notify),
+            "borrow_rate": self._config.borrow_rate,
         }
         with open(self._config_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -138,3 +141,7 @@ class ConfigManager:
             feishu_webhook=feishu_webhook,
             dingtalk_webhook=dingtalk_webhook,
         )
+
+    def set_borrow_rate(self, rate: float) -> None:
+        """设置借币请求速率（秒）"""
+        self._config.borrow_rate = rate

@@ -105,6 +105,15 @@ class SettingsDialog(tk.Toplevel):
         self._dingtalk.pack(fill=tk.X, pady=2)
         self._dingtalk.insert(0, self._config.notify.dingtalk_webhook)
 
+        # 借币请求速率
+        rate_frame = ttk.LabelFrame(self, text="借币请求速率", padding=10)
+        rate_frame.pack(fill=tk.X, **pad)
+        ttk.Label(rate_frame, text="选择请求间隔（实际会在此基础上加 0.01~0.5 秒随机浮动）:").pack(anchor=tk.W)
+        self._rate_var = tk.StringVar(value=str(self._config.borrow_rate))
+        rate_combo = ttk.Combobox(rate_frame, textvariable=self._rate_var,
+            values=["0.5", "1.5", "2.5", "3.5", "4.5", "5.5"], width=10, state="readonly")
+        rate_combo.pack(anchor=tk.W, pady=5)
+
         btn_row = ttk.Frame(self)
         btn_row.pack(fill=tk.X, pady=(10, 5), padx=10)
         ttk.Button(btn_row, text="保存", command=self._save).pack(side=tk.RIGHT, padx=5)
@@ -125,6 +134,7 @@ class SettingsDialog(tk.Toplevel):
             feishu_webhook=self._feishu.get().strip(),
             dingtalk_webhook=self._dingtalk.get().strip(),
         )
+        self._config_manager.set_borrow_rate(float(self._rate_var.get()))
         self._config_manager.save()
         self._on_save()
         self.destroy()
@@ -716,14 +726,55 @@ class MainWindow:
     def _auto_calc(self):
         if not self._service:
             return
-        # 取消之前的延迟调用，防止重复触发
+        if hasattr(self, "_auto_filling") and self._auto_filling:
+            return
         if hasattr(self, "_calc_after_id") and self._calc_after_id:
             self._root.after_cancel(self._calc_after_id)
         loan_coin = self._loan_coin.get().strip().upper()
         loan_amt = self._loan_amount.get().strip()
-        if not loan_coin or not loan_amt:
+        if not loan_coin:
             return
-        self._calc_after_id = self._root.after(300, lambda: self._run_async(lambda: self._do_auto_calc(loan_coin, loan_amt)))
+        # 币种变了 → 清空数量，重新自动填入
+        if hasattr(self, "_last_coin") and self._last_coin and self._last_coin != loan_coin:
+            self._auto_filling = True
+            self._loan_amount.delete(0, "end")
+            self._auto_filling = False
+            loan_amt = ""
+        self._last_coin = loan_coin
+        if not loan_amt:
+            self._calc_after_id = self._root.after(300, lambda: self._run_async(lambda: self._auto_fill_max(loan_coin)))
+        else:
+            self._calc_after_id = self._root.after(300, lambda: self._run_async(lambda: self._do_auto_calc(loan_coin, loan_amt)))
+
+    def _auto_fill_max(self, loan_coin):
+        """自动计算最大可借并填入数量栏"""
+        try:
+            info = self._service.calculate_max_borrow(loan_coin)
+            if info["can_borrow"] and float(info["max_amount"]) > 0:
+                max_amt = info["max_amount"]
+                safe_amt = int(float(max_amt) * 0.85)
+                int_amt = str(safe_amt)
+                # 显示最大可借
+                lab = f"最大可借 {int_amt} {loan_coin}  |  LTV " + info["current_ltv"]
+                self._root.after(0, lambda l=lab: self._calc_var.set(l))
+                self._root.after(0, lambda: self._calc_var.config(foreground="#10b981"))
+                self._root.after(0, lambda: self._fill_amount(int_amt, loan_coin))
+            else:
+                self._root.after(0, lambda: self._calc_var.set("无法借币  |  LTV " + info["current_ltv"]))
+                self._root.after(0, lambda: self._calc_var.config(foreground="#ef4444"))
+                self._root.after(0, lambda: self._set_borrow_enabled(False))
+        except Exception:
+            self._root.after(0, lambda: self._calc_var.set("计算失败"))
+            self._root.after(0, lambda: self._set_borrow_enabled(False))
+
+    def _fill_amount(self, amt, loan_coin):
+        """填入数量并触发 LTV 计算"""
+        self._auto_filling = True
+        self._loan_amount.delete(0, "end")
+        self._loan_amount.insert(0, amt)
+        self._auto_filling = False
+        # 填入后自动触发 LTV 计算
+        self._do_auto_calc(loan_coin, amt)
 
     def _do_auto_calc(self, loan_coin, loan_amt):
         try:
@@ -820,6 +871,7 @@ class MainWindow:
     def _loop_borrow(self, col_coin, loan_coin, col_amt, loan_amt):
         """循环借币，2-3 秒随机间隔，直到成功或手动停止"""
         import random, time as _time
+        ltv_fail_count = 0  # 连续 LTV 失败计数
         ERROR_MAP = {
             148012: "抵押品(USDT)余额不足",
             148011: "借币池余额不足",
@@ -851,16 +903,29 @@ class MainWindow:
                 reason = ERROR_MAP.get(e.code)
                 if not reason:
                     reason = ERROR_TEXT.get(e.message[:30], e.message[:40])
+                if e.code == 148012 or "LTV" in e.message.upper() or "THRESHOLD" in e.message.upper():
+                    ltv_fail_count += 1
+                else:
+                    ltv_fail_count = 0
                 self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, r=reason:
                     self._log_local(n, "借入\u274c", lc, la, r))
                 self._root.after(0, lambda a=attempt, r=reason:
                     self._set_status(f"\u274c 第{a}次失败: {r}"))
+                # LTV 连续失败 3 次，推送飞书/钉钉提醒
+                if ltv_fail_count >= 3 and ltv_fail_count % 3 == 0:
+                    if self._notifier:
+                        self._notifier.send(
+                            "LTV超限警告",
+                            f"币种: {loan_coin}\n数量: {loan_amt}\n失败原因: {reason}\n已连续失败: {ltv_fail_count} 次\n建议: 降低借币数量或增加抵押品",
+                            platform="all"
+                        )
             except Exception as e:
                 self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt:
                     self._log_local(n, "借入\u274c", lc, la, "未知异常"))
                 self._root.after(0, lambda a=attempt:
                     self._set_status(f"\u274c 第{a}次异常，继续尝试..."))
-            delay = random.uniform(2.0, 3.0)
+            base_rate = self._config_manager.get_config().borrow_rate
+            delay = base_rate + random.uniform(0.01, 0.5)
             _time.sleep(delay)
 
 
