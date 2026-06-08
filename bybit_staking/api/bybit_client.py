@@ -1,4 +1,4 @@
-﻿"""
+"""
 Bybit API 通信层
 负责请求签名、HTTP 封装、错误处理、速率限制跟踪
 """
@@ -23,6 +23,8 @@ class ApiRateLimit:
     limit: int = 0
     remaining: int = 0
     used: int = 0
+    banned: bool = False
+    banned_until: float = 0.0  # 解封时间戳
 
 
 @dataclass
@@ -96,6 +98,11 @@ class BybitClient:
 
     @property
     def rate_limit(self) -> ApiRateLimit:
+        # 自动解封
+        import time as _t
+        if self._rate_limit.banned and _t.time() >= self._rate_limit.banned_until:
+            self._rate_limit.banned = False
+            self._rate_limit.banned_until = 0.0
         return self._rate_limit
 
     @property
@@ -167,12 +174,36 @@ class BybitClient:
                 self._update_rate_limit(dict(resp.headers))
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
+            # 检测 429 限流封禁
+            if e.code == 429:
+                import time as _t
+                self._rate_limit.banned = True
+                self._rate_limit.banned_until = _t.time() + 300  # 默认封 5 分钟
+                retry_after = e.headers.get("Retry-After", "")
+                if retry_after:
+                    try:
+                        self._rate_limit.banned_until = _t.time() + int(retry_after)
+                    except Exception:
+                        pass
+                raise BybitApiError(e.code, "请求过于频繁，已被限流封禁")
             try: body_text = e.read().decode("utf-8"); result = json.loads(body_text)
             except: raise BybitApiError(e.code, f"HTTP {e.code}: {e.reason}")
             with urllib.request.urlopen(req, timeout=30) as resp:
                 self._update_rate_limit(dict(resp.headers))
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
+            # 检测 429 限流封禁
+            if e.code == 429:
+                import time as _t
+                self._rate_limit.banned = True
+                self._rate_limit.banned_until = _t.time() + 300  # 默认封 5 分钟
+                retry_after = e.headers.get("Retry-After", "")
+                if retry_after:
+                    try:
+                        self._rate_limit.banned_until = _t.time() + int(retry_after)
+                    except Exception:
+                        pass
+                raise BybitApiError(e.code, "请求过于频繁，已被限流封禁")
             try: body_text = e.read().decode("utf-8"); result = json.loads(body_text)
             except: raise BybitApiError(e.code, f"HTTP {e.code}: {e.reason}")
             with urllib.request.urlopen(req, timeout=30) as resp:

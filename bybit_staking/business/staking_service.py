@@ -281,6 +281,14 @@ class StakingService:
             pass
         return 0.0
 
+    def is_coin_borrowable(self, coin: str) -> bool:
+        """检查币种是否可借"""
+        try:
+            rates = self.get_interest_rate(coin)
+            return len(rates) > 0
+        except Exception:
+            return False
+
     def repay_smart(self, loan_currency: str, debt_amount: str) -> str:
         """智能还款：先尝试用借入币种还款，失败则从抵押品还款（自动转换USDT金额）"""
         import decimal

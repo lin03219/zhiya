@@ -587,8 +587,20 @@ class MainWindow:
             self._vpn_bar_var.set("VPN [ERR] 断连")
 
     def _update_rate_limit(self, rl: ApiRateLimit):
-        self._api_used_var.set(f"{rl.used}/{rl.limit}" if rl.limit > 0 else "--/--")
-        self._api_remain_var.set(f"剩余: {rl.remaining}" if rl.limit > 0 else "剩余: --")
+        if rl.banned:
+            self._api_used_var.set("已封禁!")
+            self._api_remain_var.set("等待解封...")
+            self._api_used_var.set("已封禁!")
+            self._set_status("API 已被限流封禁，等待解封")
+            self._set_controls_enabled(False)
+        elif rl.remaining == 0 and rl.limit > 0:
+            self._api_used_var.set(f"{rl.used}/{rl.limit} 已用完!")
+            self._api_remain_var.set("剩余: 0 暂停请求")
+            self._set_status("API 请求额度已用完，稍后恢复")
+        else:
+            self._api_used_var.set(f"{rl.used}/{rl.limit}" if rl.limit > 0 else "--/--")
+            self._api_remain_var.set(f"剩余: {rl.remaining}" if rl.limit > 0 else "剩余: --")
+            self._set_controls_enabled(True)
 
     def _get_current_rate_limit(self) -> ApiRateLimit:
         if self._client:
@@ -749,16 +761,24 @@ class MainWindow:
     def _auto_fill_max(self, loan_coin):
         """自动计算最大可借并填入数量栏"""
         try:
+            # 检查币种是否可借
+            if not self._service.is_coin_borrowable(loan_coin):
+                lab = "该币种不可借  |  " + loan_coin
+                self._root.after(0, lambda l=lab: self._calc_var.set(l))
+                self._root.after(0, lambda: self._calc_var.config(foreground="#ef4444"))
+                self._root.after(0, lambda: self._set_borrow_enabled(False))
+                return
             info = self._service.calculate_max_borrow(loan_coin)
             if info["can_borrow"] and float(info["max_amount"]) > 0:
                 max_amt = info["max_amount"]
-                safe_amt = int(float(max_amt) * 0.85)
-                int_amt = str(safe_amt)
-                # 显示最大可借
-                lab = f"最大可借 {int_amt} {loan_coin}  |  LTV " + info["current_ltv"]
+                # 真实最大可借（显示用）
+                real_max = str(int(float(max_amt)))
+                # 85% 冗余（填入用）
+                safe_amt = str(int(float(max_amt) * 0.85))
+                lab = f"最大可借 {real_max} {loan_coin}  |  LTV " + info["current_ltv"]
                 self._root.after(0, lambda l=lab: self._calc_var.set(l))
                 self._root.after(0, lambda: self._calc_var.config(foreground="#10b981"))
-                self._root.after(0, lambda: self._fill_amount(int_amt, loan_coin))
+                self._root.after(0, lambda: self._fill_amount(safe_amt, loan_coin))
             else:
                 self._root.after(0, lambda: self._calc_var.set("无法借币  |  LTV " + info["current_ltv"]))
                 self._root.after(0, lambda: self._calc_var.config(foreground="#ef4444"))
@@ -768,13 +788,13 @@ class MainWindow:
             self._root.after(0, lambda: self._set_borrow_enabled(False))
 
     def _fill_amount(self, amt, loan_coin):
-        """填入数量并触发 LTV 计算"""
+        """填入数量，保留最大可借显示"""
         self._auto_filling = True
         self._loan_amount.delete(0, "end")
         self._loan_amount.insert(0, amt)
         self._auto_filling = False
-        # 填入后自动触发 LTV 计算
-        self._do_auto_calc(loan_coin, amt)
+        # 直接启用按钮（最大可借 ×0.85 一定通过LTV检查）
+        self._root.after(0, lambda: self._set_borrow_enabled(True))
 
     def _do_auto_calc(self, loan_coin, loan_amt):
         try:
@@ -820,6 +840,16 @@ class MainWindow:
             self._borrow_btn.config(state="normal")
         else:
             self._borrow_btn.config(state="disabled")
+
+    def _set_controls_enabled(self, enabled: bool):
+        """封禁时禁用/启用借币相关控件"""
+        state = "normal" if enabled else "disabled"
+        self._borrow_btn.config(state=state)
+        self._loan_coin.config(state=state)
+        self._loan_amount.config(state=state)
+        if not enabled:
+            self._calc_var.set("API 限流封禁中...")
+            self._calc_var.config(foreground="#ef4444")
 
     def _do_calc_collateral(self, loan_coin, loan_amt):
         self._do_auto_calc(loan_coin, loan_amt)
@@ -1030,10 +1060,28 @@ class MainWindow:
             self._root.after(0, lambda: self._set_status("无法连接"))
 
     def _start_ltv_timer(self):
-        """每秒刷新一次 LTV"""
+        """每秒刷新 LTV + 检查封禁状态"""
         if self._service:
             self._run_async(self._refresh_ltv)
+        # 检查 API 封禁
+        self._check_ban_status()
         self._root.after(1000, self._start_ltv_timer)
+
+    def _check_ban_status(self):
+        """检查并更新封禁状态"""
+        if self._client:
+            rl = self._client.rate_limit
+            if rl.banned:
+                self._set_controls_enabled(False)
+                remaining = int(rl.banned_until - __import__("time").time())
+                if remaining > 0:
+                    mins = remaining // 60
+                    secs = remaining % 60
+                    self._set_status(f"已封禁，约 {mins}分{secs}秒 后解封")
+            elif rl.remaining == 0 and rl.limit > 0:
+                self._set_controls_enabled(False)
+            else:
+                self._set_controls_enabled(True)
 
     def _refresh_ltv(self):
         """仅刷新 LTV（轻量，不拉全部数据）"""
