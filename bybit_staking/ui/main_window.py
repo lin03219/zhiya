@@ -8,6 +8,7 @@ import threading
 from typing import Optional
 
 from ..config.config_manager import ConfigManager, AppConfig
+from ..version import VERSION, UPDATE_URL, RELEASES_URL
 from ..api.bybit_client import BybitClient, BybitApiError, VpnStatus, ApiRateLimit
 from ..business.staking_service import StakingService
 from ..notify.notifier import Notifier
@@ -390,6 +391,7 @@ class MainWindow:
         self._build_ui()
         self._root.after(300, self._auto_init)
         self._root.after(1000, self._start_ltv_timer)
+        self._root.after(5000, self._check_update)
 
     def _init_client(self):
         if self._config.api_key and self._config.api_secret:
@@ -430,6 +432,11 @@ class MainWindow:
         ttk.Label(status_bar, textvariable=self._status_var, anchor=tk.W, padding=(5, 2)).pack(
             side=tk.LEFT, fill=tk.X, expand=True
         )
+
+        # 更新按钮（初始隐藏）
+        self._update_btn = ttk.Button(status_bar, text="有新版本", command=self._open_update_url)
+        self._update_btn.pack(side=tk.RIGHT, padx=5)
+        self._update_btn.pack_forget()  # 默认隐藏
 
         # VPN 状态放在状态栏右侧
         ttk.Separator(status_bar, orient=tk.VERTICAL).pack(side=tk.RIGHT, fill=tk.Y)
@@ -1092,6 +1099,31 @@ class MainWindow:
             self._root.after(0, lambda: self._ltv_var.set(ltv))
         except Exception:
             pass
+
+    def _check_update(self):
+        """后台检查更新"""
+        update_url = self._config.update_url or UPDATE_URL
+        if not update_url:
+            return
+        self._run_async(lambda: self._do_check_update(update_url))
+
+    def _do_check_update(self, update_url):
+        import urllib.request, json as _json
+        try:
+            req = urllib.request.Request(update_url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+            remote_ver = data.get("version", "")
+            if remote_ver and remote_ver != VERSION:
+                self._root.after(0, lambda: self._update_btn.pack(side=tk.RIGHT, padx=5))
+                self._root.after(0, lambda: self._update_btn.config(
+                    text=f"v{remote_ver} 可用"))
+        except Exception:
+            pass
+
+    def _open_update_url(self):
+        import webbrowser
+        webbrowser.open(self._config.update_url.replace("version.json", "") or RELEASES_URL)
 
     def run(self):
         self._root.mainloop()

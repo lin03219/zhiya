@@ -38,6 +38,7 @@ class AppConfig:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     borrow_rate: float = 2.5           # 借币请求间隔（秒）
+    update_url: str = ""               # 版本检查 URL（JSON 含 version 字段）
 
     BYBIT_MAINNET = "https://api.bybit.com"
     BYBIT_TESTNET = "https://api-testnet.bybit.com"
@@ -99,6 +100,7 @@ class ConfigManager:
                 dingtalk_webhook=notify_data.get("dingtalk_webhook", ""),
             )
             self._config.borrow_rate = float(data.get("borrow_rate", 2.5))
+            self._config.update_url = data.get("update_url", "")
         except Exception:
             pass
         return self._config
@@ -112,6 +114,7 @@ class ConfigManager:
             "proxy": asdict(self._config.proxy),
             "notify": asdict(self._config.notify),
             "borrow_rate": self._config.borrow_rate,
+            "update_url": self._config.update_url,
         }
         with open(self._config_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -145,3 +148,7 @@ class ConfigManager:
     def set_borrow_rate(self, rate: float) -> None:
         """设置借币请求速率（秒）"""
         self._config.borrow_rate = rate
+
+    def set_update_url(self, url: str) -> None:
+        """设置版本检查 URL"""
+        self._config.update_url = url
