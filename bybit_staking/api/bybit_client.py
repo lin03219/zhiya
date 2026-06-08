@@ -174,11 +174,10 @@ class BybitClient:
                 self._update_rate_limit(dict(resp.headers))
                 result = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            # 检测 429 限流封禁
             if e.code == 429:
                 import time as _t
                 self._rate_limit.banned = True
-                self._rate_limit.banned_until = _t.time() + 300  # 默认封 5 分钟
+                self._rate_limit.banned_until = _t.time() + 300
                 retry_after = e.headers.get("Retry-After", "")
                 if retry_after:
                     try:
@@ -186,34 +185,9 @@ class BybitClient:
                     except Exception:
                         pass
                 raise BybitApiError(e.code, "请求过于频繁，已被限流封禁")
-            try: body_text = e.read().decode("utf-8"); result = json.loads(body_text)
-            except: raise BybitApiError(e.code, f"HTTP {e.code}: {e.reason}")
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                self._update_rate_limit(dict(resp.headers))
-                result = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            # 检测 429 限流封禁
-            if e.code == 429:
-                import time as _t
-                self._rate_limit.banned = True
-                self._rate_limit.banned_until = _t.time() + 300  # 默认封 5 分钟
-                retry_after = e.headers.get("Retry-After", "")
-                if retry_after:
-                    try:
-                        self._rate_limit.banned_until = _t.time() + int(retry_after)
-                    except Exception:
-                        pass
-                raise BybitApiError(e.code, "请求过于频繁，已被限流封禁")
-            try: body_text = e.read().decode("utf-8"); result = json.loads(body_text)
-            except: raise BybitApiError(e.code, f"HTTP {e.code}: {e.reason}")
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                self._update_rate_limit(dict(resp.headers))
-                result = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
             try:
                 body_text = e.read().decode("utf-8")
                 result = json.loads(body_text)
-
             except Exception:
                 raise BybitApiError(e.code, f"HTTP {e.code}: {e.reason}")
         except urllib.error.URLError as e:

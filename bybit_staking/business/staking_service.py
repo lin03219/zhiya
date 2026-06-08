@@ -46,6 +46,8 @@ class StakingService:
 
     def __init__(self, client: BybitClient):
         self._client = client
+        self._pos_cache = {}  # position 缓存
+        self._pos_cache_time = 0.0  # 缓存时间戳
 
     def _fetch_balance(self, account_type: str, coin: Optional[str] = None) -> list[WalletBalance]:
         """通用余额查询"""
@@ -149,7 +151,7 @@ class StakingService:
         result = {
             "can_borrow": False, "max_amount": "0", "max_amount_usd": "0",
             "current_ltv": "--", "projected_ltv": "--", "available_usdt": "0",
-            "total_collateral": "0", "total_debt": "0",
+            "total_collateral": "0", "total_debt": "0", "coin_borrowable": True,
         }
         try:
             pos = self.get_position()
@@ -188,6 +190,19 @@ class StakingService:
             if max_borrow_usd <= 0:
                 return result
             result["max_amount_usd"] = f"{max_borrow_usd:.2f}"
+
+            # 先查币种是否可借（用 max-loan 返回判断）
+            try:
+                trial = self._client.post("/v5/crypto-loan-common/max-loan", body={
+                    "currency": loan_coin,
+                    "collateralList": [{"ccy": "USDT", "amount": "1"}],
+                })
+                if not trial.get("result", {}).get("maxLoan", ""):
+                    result["coin_borrowable"] = False
+                    return result
+            except Exception:
+                result["coin_borrowable"] = False
+                return result
 
             price = self.get_coin_price(loan_coin)
             if price <= 0:
@@ -282,10 +297,16 @@ class StakingService:
         return 0.0
 
     def is_coin_borrowable(self, coin: str) -> bool:
-        """检查币种是否可借"""
+        """检查币种是否可借（用 max-loan 接口探测）"""
         try:
-            rates = self.get_interest_rate(coin)
-            return len(rates) > 0
+            body = {
+                "currency": coin,
+                "collateralList": [{"ccy": "USDT", "amount": "1"}],
+            }
+            result = self._client.post("/v5/crypto-loan-common/max-loan", body=body)
+            # 有返回且无报错 = 可借
+            max_loan = result.get("result", {}).get("maxLoan", "")
+            return max_loan != "" and max_loan != "0"
         except Exception:
             return False
 
@@ -313,9 +334,16 @@ class StakingService:
         return self.repay_from_collateral(loan_currency, usdt_str)
 
     def get_position(self) -> dict:
-        """获取当前持仓"""
+        """获取当前持仓（2秒缓存）"""
+        import time as _t
+        now = _t.time()
+        if self._pos_cache and (now - self._pos_cache_time) < 2:
+            return self._pos_cache
         result = self._client.get("/v5/crypto-loan-common/position")
-        return result.get("result", {})
+        data = result.get("result", {})
+        self._pos_cache = data
+        self._pos_cache_time = now
+        return data
 
     def get_loan_orders(
         self,
