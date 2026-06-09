@@ -509,7 +509,7 @@ class MainWindow:
         ttk.Label(r1, text="USDT（自动）", foreground="#059669").pack(side=tk.LEFT, padx=5)
         self._calc_var = tk.StringVar(value="--")
         ttk.Label(r1, textvariable=self._calc_var, font=("", 10, "bold"), foreground="#d97706").pack(side=tk.LEFT, padx=5)
-        # 计算按钮已移除
+        ttk.Button(r1, text="计算", width=5, command=self._manual_calc).pack(side=tk.LEFT)
 
         r2 = ttk.Frame(form)
         r2.pack(fill=tk.X, pady=2)
@@ -526,8 +526,6 @@ class MainWindow:
         self._borrow_btn.pack(side=tk.LEFT, padx=(0, 10))
         self._ack_btn = tk.Button(btn_row, text="已借到", fg="white", bg="#dc2626",
                                    font=("", 9, "bold"), command=self._on_ack_borrow)
-        self._loan_amount.bind("<KeyRelease>", lambda e: self._root.after(300, self._auto_calc))
-        self._loan_coin.bind("<KeyRelease>", lambda e: self._root.after(300, self._auto_calc))
         self._ltv_ok = False
 
         # 初始隐藏
@@ -739,6 +737,17 @@ class MainWindow:
         if not loan_coin or not loan_amt:
             return
         self._run_async(lambda: self._do_calc_collateral(loan_coin, loan_amt))
+
+    def _manual_calc(self):
+        """手动点击「计算」按钮"""
+        if not self._service:
+            return
+        loan_coin = self._loan_coin.get().strip().upper()
+        if not loan_coin:
+            return
+        self._set_status("正在计算...")
+        self._loan_amount.delete(0, "end")
+        self._run_async(lambda: self._auto_fill_max(loan_coin))
 
     def _auto_calc(self):
         if not self._service:
