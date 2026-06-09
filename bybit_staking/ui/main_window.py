@@ -1111,9 +1111,6 @@ class MainWindow:
                     mins = remaining // 60
                     secs = remaining % 60
                     self._set_status(f"已封禁，约 {mins}分{secs}秒 后解封")
-            elif rl.remaining == 0 and rl.limit > 0:
-                # 额度用完只提示，不禁用控件（每分钟自动重置）
-                self._set_status("API 请求额度已用完，稍后恢复")
             else:
                 self._set_controls_enabled(True)
 
