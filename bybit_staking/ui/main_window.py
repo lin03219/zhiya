@@ -391,7 +391,7 @@ class MainWindow:
         self._build_ui()
         self._root.after(300, self._auto_init)
         self._last_quota_warned = False  # ??????
-        self._root.after(1000, self._ban_check_timer)
+        self._download_url = None  # 新版本下载地址        self._root.after(1000, self._ban_check_timer)
         self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
     def _init_client(self):
@@ -1152,14 +1152,80 @@ class MainWindow:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
             remote_ver = data.get("tag_name", "").lstrip("v")
+            tag_name = data.get("tag_name", "")
             if remote_ver and remote_ver != VERSION:
+                dl_url = f"https://github.com/lin03219/zhiya/releases/download/{tag_name}/BybitStaking.exe"
+                self._download_url = dl_url
                 self._root.after(0, lambda: self._update_btn.pack(side=tk.RIGHT, padx=5))
                 self._root.after(0, lambda: self._update_btn.config(text=f"v{remote_ver} 可用"))
         except Exception:
             pass
     def _open_update_url(self):
-        import webbrowser
-        webbrowser.open(self._config.update_url.replace("version.json", "") or RELEASES_URL)
+        """下载新版本并自动替换"""
+        if not self._download_url:
+            import webbrowser
+            webbrowser.open(RELEASES_URL)
+            return
+        self._set_status("正在下载更新...")
+        self._run_async(self._do_download_update)
 
-    def run(self):
+    def _do_download_update(self):
+        import urllib.request, os, sys, subprocess
+        try:
+            dl_url = self._download_url
+            if getattr(sys, "frozen", False):
+                current_exe = sys.executable
+            else:
+                current_exe = os.path.abspath(__file__)
+            exe_dir = os.path.dirname(current_exe)
+            new_exe = os.path.join(exe_dir, "BybitStaking_new.exe")
+            old_exe = current_exe if current_exe.endswith(".exe") else os.path.join(exe_dir, "BybitStaking.exe")
+
+            self._root.after(0, lambda: self._set_status("下载中..."))
+            req = urllib.request.Request(dl_url)
+            proxy = self._config.proxy
+            if proxy.enabled and proxy.http:
+                req.set_proxy(proxy.http, "http")
+                req.set_proxy(proxy.http, "https")
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                with open(new_exe, "wb") as f:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            pct = int(downloaded * 100 / total)
+                            self._root.after(0, lambda p=pct: self._set_status(f"下载中 {p}%"))
+
+            self._root.after(0, lambda: self._set_status("下载完成，正在安装..."))
+            updater = os.path.join(exe_dir, "_updater.bat")
+            q = chr(34)
+            bat = (
+                "@echo off\n"
+                "chcp 65001 >nul\n"
+                "echo Waiting for app to close...\n"
+                "timeout /t 2 /nobreak >nul\n"
+                ":retry\n"
+                f"del {q}{old_exe}{q} 2>nul\n"
+                f"if exist {q}{old_exe}{q} (\n"
+                "    timeout /t 1 /nobreak >nul\n"
+                "    goto retry\n"
+                ")\n"
+                f"move /y {q}{new_exe}{q} {q}{old_exe}{q}\n"
+                "echo Update done, launching...\n"
+                f"start {q}{q} {q}{old_exe}{q}\n"
+                f"del {q}%~f0{q}"
+            )
+            with open(updater, "w", encoding="utf-8") as f:
+                f.write(bat)
+            subprocess.Popen(["cmd", "/c", updater], creationflags=0x00000008)
+            self._root.after(500, self._root.destroy)
+        except Exception as e:
+            self._root.after(0, lambda e=e: self._set_status(f"Update failed: {e}"))
+
+def run(self):
         self._root.mainloop()
