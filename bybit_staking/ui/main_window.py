@@ -1227,5 +1227,5 @@ class MainWindow:
         except Exception as e:
             self._root.after(0, lambda e=e: self._set_status(f"Update failed: {e}"))
 
-def run(self):
+    def run(self):
         self._root.mainloop()
