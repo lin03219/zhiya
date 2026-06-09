@@ -1,6 +1,6 @@
-﻿"""
-Bybit API 閫氫俊灞?
-璐熻矗璇锋眰绛惧悕銆丠TTP 灏佽銆侀敊璇鐞嗐€侀€熺巼闄愬埗璺熻釜
+"""
+Bybit API 通信层
+负责请求签名、HTTP 封装、错误处理、速率限制跟踪
 """
 import hashlib
 import hmac
@@ -14,30 +14,30 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from config.config_manager import AppConfig
+from ..config.config_manager import AppConfig
 
 
 @dataclass
 class ApiRateLimit:
-    """API 閫熺巼闄愬埗鐘舵€?""
+    """API 速率限制状态"""
     limit: int = 0
     remaining: int = 0
     used: int = 0
     banned: bool = False
-    banned_until: float = 0.0  # 瑙ｅ皝鏃堕棿鎴?
+    banned_until: float = 0.0  # 解封时间戳
 
 
 @dataclass
 class VpnStatus:
-    """杩炴帴鐘舵€?""
+    """连接状态"""
     connected: bool = False
     latency_ms: int = 0
     level: str = "red"  # green / yellow / red
-    label: str = "鏈祴璇?
+    label: str = "未测试"
 
 
 class BybitApiError(Exception):
-    """Bybit API 寮傚父"""
+    """Bybit API 异常"""
 
     def __init__(self, code: int, message: str):
         self.code = code
@@ -46,7 +46,7 @@ class BybitApiError(Exception):
 
 
 class BybitClient:
-    """Bybit V5 API 瀹㈡埛绔?""
+    """Bybit V5 API 客户端"""
 
     RECV_WINDOW = 5000
     BYBIT_HOST = "api.bybit.com"
@@ -59,7 +59,7 @@ class BybitClient:
         self._vpn_status = VpnStatus()
 
     def _setup_opener(self):
-        """瀹夎鍏ㄥ眬 opener锛堝惈浠ｇ悊鍜?SSL锛?""
+        """安装全局 opener（含代理和 SSL）"""
         handlers = []
         proxy = self._config.proxy
         if proxy.enabled:
@@ -75,7 +75,7 @@ class BybitClient:
         urllib.request.install_opener(opener)
 
     def _sign(self, timestamp: str, param_str: str) -> str:
-        """鐢熸垚 Bybit V5 璇锋眰绛惧悕"""
+        """生成 Bybit V5 请求签名"""
         raw = timestamp + self._config.api_key + str(self.RECV_WINDOW) + param_str
         return hmac.new(
             self._config.api_secret.encode("utf-8"),
@@ -84,7 +84,7 @@ class BybitClient:
         ).hexdigest()
 
     def _update_rate_limit(self, headers: dict):
-        """浠庡搷搴斿ご鏇存柊閫熺巼闄愬埗"""
+        """从响应头更新速率限制"""
         try:
             limit = headers.get("X-Bapi-Limit", "")
             status = headers.get("X-Bapi-Limit-Status", "")
@@ -98,7 +98,7 @@ class BybitClient:
 
     @property
     def rate_limit(self) -> ApiRateLimit:
-        # 鑷姩瑙ｅ皝
+        # 自动解封
         import time as _t
         if self._rate_limit.banned and _t.time() >= self._rate_limit.banned_until:
             self._rate_limit.banned = False
@@ -110,7 +110,7 @@ class BybitClient:
         return self._vpn_status
 
     def test_latency(self) -> VpnStatus:
-        """娴嬭瘯鍒?Bybit 鏈嶅姟鍣ㄧ殑寤惰繜锛堣蛋浠ｇ悊锛?""
+        """测试到 Bybit 服务器的延迟（走代理）"""
         url = self._config.base_url + "/v5/market/time"
         start = time.time()
         try:
@@ -130,7 +130,7 @@ class BybitClient:
             self._vpn_status.connected = False
             self._vpn_status.latency_ms = 0
             self._vpn_status.level = "red"
-            self._vpn_status.label = "鏂繛"
+            self._vpn_status.label = "断连"
         return self._vpn_status
 
     def _request(
@@ -141,7 +141,7 @@ class BybitClient:
         body: Optional[dict] = None,
         use_full_url: bool = False,
     ) -> dict:
-        """閫氱敤 HTTP 璇锋眰"""
+        """通用 HTTP 请求"""
         if use_full_url:
             url = endpoint
         else:
@@ -184,29 +184,29 @@ class BybitClient:
                         self._rate_limit.banned_until = _t.time() + int(retry_after)
                     except Exception:
                         pass
-                raise BybitApiError(e.code, "璇锋眰杩囦簬棰戠箒锛屽凡琚檺娴佸皝绂?)
+                raise BybitApiError(e.code, "请求过于频繁，已被限流封禁")
             try:
                 body_text = e.read().decode("utf-8")
                 result = json.loads(body_text)
             except Exception:
                 raise BybitApiError(e.code, f"HTTP {e.code}: {e.reason}")
         except urllib.error.URLError as e:
-            raise BybitApiError(-1, f"缃戠粶閿欒: {e.reason}")
+            raise BybitApiError(-1, f"网络错误: {e.reason}")
         except Exception as e:
-            raise BybitApiError(-1, f"璇锋眰寮傚父: {str(e)}")
+            raise BybitApiError(-1, f"请求异常: {str(e)}")
 
         if result.get("retCode") != 0:
             raise BybitApiError(
                 result.get("retCode", -1),
-                result.get("retMsg", "鏈煡閿欒"),
+                result.get("retMsg", "未知错误"),
             )
 
         return result
 
     def get(self, endpoint: str, params: Optional[dict] = None, use_full_url: bool = False) -> dict:
-        """GET 璇锋眰"""
+        """GET 请求"""
         return self._request("GET", endpoint, params=params, use_full_url=use_full_url)
 
     def post(self, endpoint: str, body: Optional[dict] = None, use_full_url: bool = False) -> dict:
-        """POST 璇锋眰"""
+        """POST 请求"""
         return self._request("POST", endpoint, body=body, use_full_url=use_full_url)

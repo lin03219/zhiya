@@ -1,17 +1,17 @@
-﻿"""
-璐ㄦ娂鍊熷竵涓氬姟妯″潡
-鏀寔璐ㄦ娂銆佸€熷竵銆佽繕娆俱€佹寔浠?璁㈠崟鏌ヨ銆佸埄鎭煡璇€佷綑棰濇煡璇€佽处鍐呭垝杞?
+"""
+质押借币业务模块
+支持质押、借币、还款、持仓/订单查询、利息查询、余额查询、账内划转
 """
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from api.bybit_client import BybitClient
+from ..api.bybit_client import BybitClient
 
 
 @dataclass
 class WalletBalance:
-    """閽卞寘浣欓"""
+    """钱包余额"""
     coin: str = ""
     wallet_balance: str = "0"
     available_balance: str = "0"
@@ -20,7 +20,7 @@ class WalletBalance:
 
 @dataclass
 class LoanOrder:
-    """鍊熻捶璁㈠崟"""
+    """借贷订单"""
     order_id: str = ""
     collateral_coin: str = ""
     loan_coin: str = ""
@@ -34,7 +34,7 @@ class LoanOrder:
 
 @dataclass
 class InterestRate:
-    """鍒╃巼淇℃伅"""
+    """利率信息"""
     coin: str = ""
     hourly_rate: str = "0"
     daily_rate: str = "0"
@@ -42,15 +42,15 @@ class InterestRate:
 
 
 class StakingService:
-    """璐ㄦ娂鍊熷竵涓氬姟鏈嶅姟"""
+    """质押借币业务服务"""
 
     def __init__(self, client: BybitClient):
         self._client = client
-        self._pos_cache = {}  # position 缂撳瓨
-        self._pos_cache_time = 0.0  # 缂撳瓨鏃堕棿鎴?
+        self._pos_cache = {}  # position 缓存
+        self._pos_cache_time = 0.0  # 缓存时间戳
 
     def _fetch_balance(self, account_type: str, coin: Optional[str] = None) -> list[WalletBalance]:
-        """閫氱敤浣欓鏌ヨ"""
+        """通用余额查询"""
         params = {"accountType": account_type}
         if coin:
             params["coin"] = coin
@@ -67,7 +67,7 @@ class StakingService:
         return balances
 
     def _sum_usd(self, balances: list[WalletBalance]) -> float:
-        """姹囨€?USD 浼板€?""
+        """汇总 USD 估值"""
         total = 0.0
         for b in balances:
             try:
@@ -77,15 +77,15 @@ class StakingService:
         return total
 
     def get_unified_balance(self, coin: Optional[str] = None) -> list[WalletBalance]:
-        """缁熶竴璐︽埛浣欓"""
+        """统一账户余额"""
         return self._fetch_balance("UNIFIED", coin)
 
     def get_unified_total_usd(self) -> float:
-        """缁熶竴璐︽埛鎬昏祫浜?USD"""
+        """统一账户总资产 USD"""
         return self._sum_usd(self.get_unified_balance())
 
     def get_fund_balance(self, coin: Optional[str] = None) -> list[WalletBalance]:
-        """璧勯噾璐︽埛浣欓锛團UND 鐢ㄤ笓鐢ㄦ帴鍙ｏ級"""
+        """资金账户余额（FUND 用专用接口）"""
         try:
             params = {"accountType": "FUND"}
             result = self._client.get("/v5/asset/transfer/query-account-coins-balance", params=params)
@@ -109,15 +109,15 @@ class StakingService:
             return []
 
     def get_fund_total_usd(self) -> float:
-        """璧勯噾璐︽埛鎬昏祫浜?USD"""
+        """资金账户总资产 USD"""
         return self._sum_usd(self.get_fund_balance())
 
     def get_all_total_usd(self) -> float:
-        """鎵€鏈夎处鎴锋€昏祫浜?USD"""
+        """所有账户总资产 USD"""
         return self.get_unified_total_usd() + self.get_fund_total_usd()
 
     def calculate_collateral(self, loan_coin: str, loan_amount: str):
-        """杩斿洖 (鎵€闇€鎶垫娂閲? 鏈€澶TV%)"""
+        """返回 (所需抵押量, 最大LTV%)"""
         max_ltv = "--"
         try:
             balances = self.get_fund_balance()
@@ -147,7 +147,7 @@ class StakingService:
             return ("0", "--")
 
     def calculate_max_borrow(self, loan_coin: str) -> dict:
-        """鏍规嵁 LTV 鈮?80% 璁＄畻鏈€澶у彲鍊?""
+        """根据 LTV ≤ 80% 计算最大可借"""
         result = {
             "can_borrow": False, "max_amount": "0", "max_amount_usd": "0",
             "current_ltv": "--", "projected_ltv": "--", "available_usdt": "0",
@@ -164,13 +164,13 @@ class StakingService:
             result["total_collateral"] = str(total_collateral)
 
             fund_usdt = 0.0
-            # 鏌ヨ祫閲戣处鎴?USDT
+            # 查资金账户 USDT
             balances = self.get_fund_balance()
             for b in balances:
                 if b.coin == "USDT":
                     fund_usdt += float(b.wallet_balance)
                     break
-            # 鏌ョ粺涓€璐︽埛 USDT
+            # 查统一账户 USDT
             try:
                 uni_balances = self.get_unified_balance()
                 for b in uni_balances:
@@ -191,7 +191,7 @@ class StakingService:
                 return result
             result["max_amount_usd"] = f"{max_borrow_usd:.2f}"
 
-            # 鍏堟煡甯佺鏄惁鍙€燂紙鐢?max-loan 杩斿洖鍒ゆ柇锛?
+            # 先查币种是否可借（用 max-loan 返回判断）
             try:
                 trial = self._client.post("/v5/crypto-loan-common/max-loan", body={
                     "currency": loan_coin,
@@ -218,7 +218,7 @@ class StakingService:
         return result
 
     def get_current_ltv(self) -> str:
-        """杩斿洖褰撳墠鎸佷粨 LTV锛堜粠 Bybit 鐩存帴鑾峰彇锛?""
+        """返回当前持仓 LTV（从 Bybit 直接获取）"""
         try:
             result = self._client.get("/v5/crypto-loan-common/position")
             ltv_raw = result.get("result", {}).get("ltv", "")
@@ -229,7 +229,7 @@ class StakingService:
         return "--"
 
     def get_account_info(self) -> dict:
-        """鑾峰彇璐︽埛淇℃伅"""
+        """获取账户信息"""
         result = self._client.get("/v5/account/info")
         return result.get("result", {})
 
@@ -240,7 +240,7 @@ class StakingService:
         from_account: str,
         to_account: str,
     ) -> str:
-        """璐﹀唴浣欓鍒掕浆"""
+        """账内余额划转"""
         body = {
             "transferId": str(uuid.uuid4()),
             "coin": coin,
@@ -258,7 +258,7 @@ class StakingService:
         collateral_amount: str,
         loan_amount: str,
     ) -> str:
-        """鍊熷竵锛堣川鎶煎€熻捶锛夆€斺€斾娇鐢?V5 crypto-loan-flexible 鎺ュ彛"""
+        """借币（质押借贷）——使用 V5 crypto-loan-flexible 接口"""
         body = {
             "loanCurrency": loan_coin,
             "loanAmount": loan_amount,
@@ -271,19 +271,19 @@ class StakingService:
         return data.get("orderId", "")
 
     def repay(self, loan_currency: str, amount: str) -> str:
-        """杩樻"""
+        """还款"""
         body = {"loanCurrency": loan_currency, "amount": amount}
         result = self._client.post("/v5/crypto-loan-flexible/repay", body=body)
         return result.get("result", {}).get("repayId", "")
 
     def repay_from_collateral(self, loan_currency: str, amount: str) -> str:
-        """浠庢姷鎶煎搧杩樻锛堢敤 USDT 鎶垫娂鍝佹姷鎵ｏ紝鏃犻渶璐︽埛鏈夎甯佺锛?""
+        """从抵押品还款（用 USDT 抵押品抵扣，无需账户有该币种）"""
         body = {"loanCurrency": loan_currency, "amount": amount}
         result = self._client.post("/v5/crypto-loan-flexible/repay-collateral", body=body)
         return result.get("result", {}).get("repayId", "")
 
     def get_coin_price(self, coin: str) -> float:
-        """鑾峰彇甯佺瀵?USDT 鐨勫綋鍓嶄环鏍?""
+        """获取币种对 USDT 的当前价格"""
         try:
             result = self._client.get("/v5/market/tickers", params={
                 "category": "spot",
@@ -297,21 +297,21 @@ class StakingService:
         return 0.0
 
     def is_coin_borrowable(self, coin: str) -> bool:
-        """妫€鏌ュ竵绉嶆槸鍚﹀彲鍊燂紙鐢?max-loan 鎺ュ彛鎺㈡祴锛?""
+        """检查币种是否可借（用 max-loan 接口探测）"""
         try:
             body = {
                 "currency": coin,
                 "collateralList": [{"ccy": "USDT", "amount": "1"}],
             }
             result = self._client.post("/v5/crypto-loan-common/max-loan", body=body)
-            # 鏈夎繑鍥炰笖鏃犳姤閿?= 鍙€?
+            # 有返回且无报错 = 可借
             max_loan = result.get("result", {}).get("maxLoan", "")
             return max_loan != "" and max_loan != "0"
         except Exception:
             return False
 
     def repay_smart(self, loan_currency: str, debt_amount: str) -> str:
-        """鏅鸿兘杩樻锛氬厛灏濊瘯鐢ㄥ€熷叆甯佺杩樻锛屽け璐ュ垯浠庢姷鎶煎搧杩樻锛堣嚜鍔ㄨ浆鎹SDT閲戦锛?""
+        """智能还款：先尝试用借入币种还款，失败则从抵押品还款（自动转换USDT金额）"""
         import decimal
         try:
             d = decimal.Decimal(str(debt_amount))
@@ -334,7 +334,7 @@ class StakingService:
         return self.repay_from_collateral(loan_currency, usdt_str)
 
     def get_position(self) -> dict:
-        """鑾峰彇褰撳墠鎸佷粨锛?绉掔紦瀛橈級"""
+        """获取当前持仓（2秒缓存）"""
         import time as _t
         now = _t.time()
         if self._pos_cache and (now - self._pos_cache_time) < 2:
@@ -351,7 +351,7 @@ class StakingService:
         status: Optional[str] = None,
         limit: int = 20,
     ) -> list[LoanOrder]:
-        """鏌ヨ鍊熻捶璁㈠崟锛堜娇鐢?borrow-history锛?""
+        """查询借贷订单（使用 borrow-history）"""
         params: dict = {"limit": limit}
         result = self._client.get("/v5/crypto-loan-flexible/borrow-history", params=params)
         orders = []
@@ -370,7 +370,7 @@ class StakingService:
         return orders
 
     def get_borrow_history(self, limit: int = 20) -> list[dict]:
-        """鍊熷竵鍘嗗彶"""
+        """借币历史"""
         result = self._client.get(
             "/v5/crypto-loan-flexible/borrow-history",
             params={"limit": limit},
@@ -378,7 +378,7 @@ class StakingService:
         return result.get("result", {}).get("list", [])
 
     def get_repay_history(self, limit: int = 20) -> list[dict]:
-        """杩樻鍘嗗彶"""
+        """还款历史"""
         result = self._client.get(
             "/v5/crypto-loan-flexible/repay-orders",
             params={"limit": limit},
@@ -386,12 +386,12 @@ class StakingService:
         return result.get("result", {}).get("list", [])
 
     def get_unpaid_orders(self) -> list[dict]:
-        """鏈繕璁㈠崟"""
+        """未还订单"""
         result = self._client.get("/v5/crypto-loan-flexible/unpaid-loan-order")
         return result.get("result", {}).get("list", [])
 
     def get_interest_rate(self, coin: Optional[str] = None) -> list[InterestRate]:
-        """鏌ヨ鍊熻捶鍒╃巼"""
+        """查询借贷利率"""
         params = {}
         if coin:
             params["coin"] = coin
@@ -407,6 +407,6 @@ class StakingService:
         return rates
 
     def get_collateral_info(self) -> dict:
-        """鏌ヨ璐ㄦ娂鍝佷俊鎭?""
+        """查询质押品信息"""
         result = self._client.get("/v5/crypto-loan-flexible/collateral-info")
         return result.get("result", {})

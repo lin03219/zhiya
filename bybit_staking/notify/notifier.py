@@ -8,7 +8,7 @@ import urllib.request
 import urllib.error
 from typing import Optional
 
-from config.config_manager import NotifyConfig
+from ..config.config_manager import NotifyConfig
 
 
 class Notifier:
