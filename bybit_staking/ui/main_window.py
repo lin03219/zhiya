@@ -390,6 +390,7 @@ class MainWindow:
 
         self._build_ui()
         self._root.after(300, self._auto_init)
+        self._last_quota_warned = False  # ??????
         self._root.after(1000, self._ban_check_timer)
         self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
@@ -1112,10 +1113,15 @@ class MainWindow:
                     secs = remaining % 60
                     self._set_status(f"已封禁，约 {mins}分{secs}秒 后解封")
             elif rl.remaining == 0 and rl.limit > 0:
-                # 额度用完只提示，不禁用控件（每分钟自动重置）
-                self._set_status("API 请求额度已用完，稍后恢复")
+                # ????????????????????????
+                if not self._last_quota_warned:
+                    self._set_status("API ????????????")
+                    self._last_quota_warned = True
             else:
                 self._set_controls_enabled(True)
+                if self._last_quota_warned:
+                    self._last_quota_warned = False
+                    self._set_status("")  # ???????
 
     def _refresh_ltv(self):
         """仅刷新 LTV（轻量，不拉全部数据）"""
