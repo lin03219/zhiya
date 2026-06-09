@@ -390,8 +390,8 @@ class MainWindow:
 
         self._build_ui()
         self._root.after(300, self._auto_init)
-        self._root.after(1000, self._start_ltv_timer)
-        self._root.after(5000, self._check_update)
+        self._root.after(1000, self._ban_check_timer)
+        self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
     def _init_client(self):
         if self._config.api_key and self._config.api_secret:
@@ -488,6 +488,9 @@ class MainWindow:
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, **pad)
 
         # 设置
+        # 版本号
+        ttk.Label(f, text=f"v{VERSION}", foreground="#9ca3af", font=("", 7)).pack(pady=(10, 0))
+        ttk.Button(f, text="检查更新", width=8, command=self._check_update).pack()
         ttk.Button(f, text="设置", command=self._open_settings).pack(pady=10)
 
     def _build_right_panel(self):
@@ -919,8 +922,15 @@ class MainWindow:
         ERROR_TEXT = {
             "LTV_EXCEEDS_THRESHOLD": "超过最大LTV限制",
             "COLLATERAL_BALANCE_NOT_ENOUGH": "抵押品余额不足",
-            "LOAN_FINANCE_BALANCE_NOT_ENOUGH": "借币池余额不足",
+            "LOAN_FINANCE_BALANCE_NOT_ENO": "借币池余额不足",
+            "LOAN_PLATFORM_QUOTA_NOT": "平台借币配额不足",
+            "LOAN_PLATFORM_QUOTA_NOT_ENO": "平台借币配额不足",
             "LOAN_QUANTITY_NOT_ALLOWED": "借币数量不合规",
+            "LOAN_AMOUNT_EXCEED_MAX": "超出最大可借数量",
+            "REPAY_AMOUNT_EXCEED_DEBT": "还款额超过欠款",
+            "INSUFFICIENT_BALANCE_IN_S": "账户余额不足",
+            "PARAMETER_ERROR": "请求参数错误",
+            "REQUEST_PARAMETER_ERROR": "请求参数错误",
         }
         attempt = 0
         while self._borrow_looping:
@@ -939,7 +949,14 @@ class MainWindow:
             except BybitApiError as e:
                 reason = ERROR_MAP.get(e.code)
                 if not reason:
-                    reason = ERROR_TEXT.get(e.message[:30], e.message[:40])
+                    # 子串匹配，比前缀截断更可靠
+                    msg_upper = e.message.upper()
+                    for key, val in ERROR_TEXT.items():
+                        if key.upper() in msg_upper:
+                            reason = val
+                            break
+                    if not reason:
+                        reason = e.message[:40]
                 if e.code == 148012 or "LTV" in e.message.upper() or "THRESHOLD" in e.message.upper():
                     ltv_fail_count += 1
                 else:
@@ -976,6 +993,7 @@ class MainWindow:
         # 启动飞书循环通知
         self._notifying = True
         threading.Thread(target=self._notify_loop, args=(order_id, col_coin, col_amt, loan_coin, loan_amt), daemon=True).start()
+        self._run_async(self._refresh_ltv)  # 借币成功后刷新 LTV
         self._refresh_all()
 
     def _color_blink(self):
@@ -1066,12 +1084,10 @@ class MainWindow:
         else:
             self._root.after(0, lambda: self._set_status("无法连接"))
 
-    def _start_ltv_timer(self):
-        """每5秒刷新 LTV + 检查封禁状态"""
-        if self._service:
-            self._run_async(self._refresh_ltv)
+    def _ban_check_timer(self):
+        """每5秒检查 API 封禁状态"""
         self._check_ban_status()
-        self._root.after(5000, self._start_ltv_timer)
+        self._root.after(5000, self._ban_check_timer)
 
     def _check_ban_status(self):
         """检查并更新封禁状态"""
@@ -1101,26 +1117,31 @@ class MainWindow:
             pass
 
     def _check_update(self):
-        """后台检查更新"""
+        """后台检查更新 + 每30分钟重试"""
+        self._run_async(self._do_check_update_wrapper)
+        # 30分钟后重试
+        self._root.after(30 * 60 * 1000, self._check_update)
+
+    def _do_check_update_wrapper(self):
+        import urllib.request, json as _json
         update_url = self._config.update_url or UPDATE_URL
         if not update_url:
             return
-        self._run_async(lambda: self._do_check_update(update_url))
-
-    def _do_check_update(self, update_url):
-        import urllib.request, json as _json
         try:
             req = urllib.request.Request(update_url)
+            proxy = self._config.proxy
+            if proxy.enabled and proxy.http:
+                req.set_proxy(proxy.http, "http")
+                req.set_proxy(proxy.http, "https")
+            req.add_header("Accept", "application/vnd.github+json")
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-            remote_ver = data.get("version", "")
+            remote_ver = data.get("tag_name", "").lstrip("v")
             if remote_ver and remote_ver != VERSION:
                 self._root.after(0, lambda: self._update_btn.pack(side=tk.RIGHT, padx=5))
-                self._root.after(0, lambda: self._update_btn.config(
-                    text=f"v{remote_ver} 可用"))
+                self._root.after(0, lambda: self._update_btn.config(text=f"v{remote_ver} 可用"))
         except Exception:
             pass
-
     def _open_update_url(self):
         import webbrowser
         webbrowser.open(self._config.update_url.replace("version.json", "") or RELEASES_URL)
