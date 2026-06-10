@@ -170,18 +170,8 @@ class StakingService:
                 if b.coin == "USDT":
                     fund_usdt += float(b.wallet_balance)
                     break
-            # 查统一账户 USDT
-            try:
-                uni_balances = self.get_unified_balance()
-                for b in uni_balances:
-                    if b.coin == "USDT":
-                        fund_usdt += float(b.wallet_balance)
-                        break
-            except Exception:
-                pass
-            result["available_usdt"] = str(fund_usdt)
 
-            total_collateral_after = total_collateral + fund_usdt
+            total_collateral_after = fund_usdt  # fund account only
             if total_collateral_after <= 0:
                 return result
 
