@@ -92,8 +92,11 @@ class StakingService:
             balances = []
             coins = result.get("result", {}).get("balance", [])
             for item in coins:
-                wb = str(item.get("walletBalance", "0"))
                 coin_name = item.get("coin", "")
+                # ??????????????
+                if coin and coin_name.upper() != coin.upper():
+                    continue
+                wb = str(item.get("walletBalance", "0"))
                 if coin_name in ("USDT", "USDC", "BUSD", "DAI"):
                     usd_val = wb
                 else:

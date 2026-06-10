@@ -181,7 +181,7 @@ class PositionsWindow(tk.Toplevel):
         pad = {"padx": 10, "pady": 3}
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=10, pady=(10, 2))
-        for text, width, anchor in [("借入币种",10,tk.W),("欠款总额",14,tk.CENTER),("利率(时)",12,tk.CENTER),("操作",20,tk.CENTER)]:
+        for text, width, anchor in [("借入币种",10,tk.W),("欠款总额",14,tk.CENTER),("利率(时)",12,tk.CENTER),("统一持有",10,tk.CENTER),("资金持有",10,tk.CENTER),("操作",20,tk.CENTER)]:
             ttk.Label(header,text=text,width=width,anchor=anchor,font=("",9,"bold")).pack(side=tk.LEFT,padx=1)
         ttk.Separator(self,orient=tk.HORIZONTAL).pack(fill=tk.X,padx=10)
         cf = ttk.Frame(self)
@@ -216,6 +216,19 @@ class PositionsWindow(tk.Toplevel):
             ltv = f"{float(lr)*100:.2f}%" if lr else "--"
             if not bl:
                 ttk.Label(self._row_container,text="暂无借币持仓",foreground="gray").pack(pady=20)
+            # 查询统一账户余额
+            unified_map = {}
+            fund_map = {}
+            try:
+                for ub in self._service.get_unified_balance():
+                    unified_map[ub.coin] = ub.wallet_balance
+            except Exception:
+                pass
+            try:
+                for fb in self._service.get_fund_balance():
+                    fund_map[fb.coin] = fb.wallet_balance
+            except Exception:
+                pass
             for b in bl:
                 coin = b.get("loanCurrency","")
                 debt = b.get("flexibleTotalDebt","0")
@@ -227,6 +240,11 @@ class PositionsWindow(tk.Toplevel):
                 ttk.Label(row,text=coin,width=10,anchor=tk.W).pack(side=tk.LEFT,padx=1)
                 ttk.Label(row,text=debt,width=14,anchor=tk.CENTER).pack(side=tk.LEFT,padx=1)
                 ttk.Label(row,text=rp,width=12,anchor=tk.CENTER).pack(side=tk.LEFT,padx=1)
+                # 统一账户该币种余额
+                uni_bal = unified_map.get(coin, "0")
+                ttk.Label(row, text=uni_bal, width=10, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
+                fund_bal = fund_map.get(coin, "0")
+                ttk.Label(row, text=fund_bal, width=10, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
                 op = ttk.Frame(row)
                 op.pack(side=tk.LEFT,padx=1,fill=tk.X,expand=True)
                 ttk.Button(op,text="划转",width=5,command=lambda c=coin:self._transfer_coin(c)).pack(side=tk.LEFT,padx=2)
@@ -300,8 +318,29 @@ class TransferDialog(tk.Toplevel):
         ttk.Label(row1, text="数量:", width=6).pack(side=tk.LEFT)
         self._amount = ttk.Entry(row1, width=14)
         self._amount.pack(side=tk.LEFT)
+        ttk.Button(row1, text="全部", width=4, command=self._fill_max).pack(side=tk.LEFT, padx=3)
 
         ttk.Button(self, text="执行划转", command=self._do_transfer).pack(pady=15)
+
+    def _fill_max(self):
+        """根据方向自动填入对应账户全部余额"""
+        coin = self._coin.get().strip().upper()
+        if not coin or not self._service:
+            return
+        try:
+            direction = self._direction.get()
+            if direction == "UNIFIED_TO_FUND":
+                balances = self._service.get_unified_balance(coin)
+            else:
+                balances = self._service.get_fund_balance(coin)
+            # 精确匹配币种，取该币种的余额
+            for b in balances:
+                if b.coin.upper() == coin:
+                    self._amount.delete(0, tk.END)
+                    self._amount.insert(0, b.wallet_balance)
+                    return
+        except Exception:
+            pass
 
     def _do_transfer(self):
         if not self._service:
@@ -330,7 +369,6 @@ class TransferDialog(tk.Toplevel):
                 self._on_success()
         except BybitApiError as e:
             messagebox.showerror("划转失败", str(e), parent=self)
-
 
 class MainWindow:
     """主窗口 — 简洁版"""
