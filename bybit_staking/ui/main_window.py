@@ -33,9 +33,9 @@ def _fmt_usd(value: float) -> str:
     if value >= 10000:
         return f"${value:,.0f}"
     elif value >= 1:
-        return f"${value:,.2f}"
+        return f"${value:,.3f}"
     else:
-        return "$0.00"
+        return "$0.000"
 
 
 class SettingsDialog(tk.Toplevel):
@@ -115,6 +115,14 @@ class SettingsDialog(tk.Toplevel):
             values=["0.5", "1.5", "2.5", "3.5", "4.5", "5.5"], width=10, state="readonly")
         rate_combo.pack(anchor=tk.W, pady=5)
 
+        # LTV 阈值提醒
+        ltv_alert_frame = ttk.LabelFrame(self, text="LTV 飞书提醒", padding=10)
+        ltv_alert_frame.pack(fill=tk.X, **pad)
+        ttk.Label(ltv_alert_frame, text="LTV 高于以下值时发送飞书提醒 (%):").pack(anchor=tk.W)
+        self._ltv_threshold = ttk.Entry(ltv_alert_frame, width=10)
+        self._ltv_threshold.pack(anchor=tk.W, pady=2)
+        self._ltv_threshold.insert(0, str(self._config.notify.ltv_threshold))
+
         btn_row = ttk.Frame(self)
         btn_row.pack(fill=tk.X, pady=(10, 5), padx=10)
         ttk.Button(btn_row, text="保存", command=self._save).pack(side=tk.RIGHT, padx=5)
@@ -136,6 +144,7 @@ class SettingsDialog(tk.Toplevel):
             dingtalk_webhook=self._dingtalk.get().strip(),
         )
         self._config_manager.set_borrow_rate(float(self._rate_var.get()))
+        self._config_manager.set_ltv_threshold(float(self._ltv_threshold.get() or "0"))
         self._config_manager.save()
         self._on_save()
         self.destroy()
@@ -182,6 +191,7 @@ class PositionsWindow(tk.Toplevel):
         btn_row = ttk.Frame(self)
         btn_row.pack(fill=tk.X, **pad)
         ttk.Button(btn_row, text="一键还清全部", command=self._repay_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_row, text="划转", command=self._transfer_coin).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_row, text="还币", command=self._repay_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_row, text="刷新", command=self._refresh).pack(side=tk.RIGHT)
 
@@ -197,7 +207,7 @@ class PositionsWindow(tk.Toplevel):
             cl = pos.get("collateralList", [])
             total_debt = pos.get("totalDebt", "0")
             ltv_raw = pos.get("ltv", "")
-            ltv = f"{float(ltv_raw)*100:.1f}%" if ltv_raw else "--"
+            ltv = f"{float(ltv_raw)*100:.2f}%" if ltv_raw else "--"
 
             for b in bl:
                 rate = b.get("flexibleHourlyInterestRate", "0")
@@ -288,7 +298,7 @@ class PositionsWindow(tk.Toplevel):
 class TransferDialog(tk.Toplevel):
     """划转弹窗 — 统一账户 ↔ 资金账户"""
 
-    def __init__(self, parent, service: Optional[StakingService], on_success=None):
+    def __init__(self, parent, service: Optional[StakingService], default_coin: str = "USDT", on_success=None):
         super().__init__(parent)
         self._service = service
         self._on_success = on_success
@@ -320,6 +330,7 @@ class TransferDialog(tk.Toplevel):
         ttk.Label(row1, text="币种:", width=6).pack(side=tk.LEFT)
         self._coin = ttk.Combobox(row1, values=["USDT", "USDC", "BTC", "ETH", "SOL"], width=12)
         self._coin.pack(side=tk.LEFT, padx=5)
+        self._coin.set(default_coin)
         ttk.Label(row1, text="数量:", width=6).pack(side=tk.LEFT)
         self._amount = ttk.Entry(row1, width=14)
         self._amount.pack(side=tk.LEFT)
@@ -392,6 +403,7 @@ class MainWindow:
         self._root.after(300, self._auto_init)
         self._last_quota_warned = False  # ??????
         self._download_url = None  # 新版本下载地址        self._root.after(1000, self._ban_check_timer)
+        self._root.after(10000, self._ltv_alert_timer)  # LTV 飞书提醒（10秒后开始）
         self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
     def _init_client(self):
@@ -620,7 +632,7 @@ class MainWindow:
         PositionsWindow(self._root, self._service)
 
     def _open_transfer(self):
-        TransferDialog(self._root, self._service, on_success=self._refresh_all)
+        TransferDialog(self._root, self._service, default_coin="USDT", on_success=self._refresh_all)
 
     def _show_interest(self):
         if not self._service:
@@ -844,7 +856,7 @@ class MainWindow:
             need_collateral = want_usd / 0.80
             projected_ltv = (total_debt + want_usd) / (total_collateral + need_collateral) * 100
             if want <= float(max_amt) and projected_ltv <= 80:
-                lab = f"{need_collateral:.2f} USDT  |  LTV {cur_ltv} -> {projected_ltv:.1f}%"
+                lab = f"{need_collateral:.2f} USDT  |  LTV {cur_ltv} -> {projected_ltv:.2f}%"
                 self._root.after(0, lambda l=lab: self._calc_var.set(l))
                 self._root.after(0, lambda: self._calc_var.config(foreground="#10b981"))
                 self._root.after(0, lambda: self._set_borrow_enabled(True))
@@ -1229,3 +1241,26 @@ class MainWindow:
 
     def run(self):
         self._root.mainloop()
+
+    def _ltv_alert_timer(self):
+        """定期检查 LTV 是否低于阈值"""
+        self._check_ltv_alert()
+        self._root.after(60000, self._ltv_alert_timer)  # 每分钟检查一次
+
+    def _check_ltv_alert(self):
+        """检查 LTV 并发送飞书提醒"""
+        if not self._service or not self._notifier:
+            return
+        threshold = self._config.notify.ltv_threshold
+        if threshold <= 0:
+            return  # 未设置阈值
+        try:
+            ltv_str = self._service.get_current_ltv()
+            if ltv_str == "--":
+                return
+            ltv_val = float(ltv_str.rstrip("%"))
+            if ltv_val > threshold:
+                msg = f"LTV 警告：当前 LTV {ltv_str}，高于设定阈值 {threshold}%"
+                self._run_async(lambda: self._notifier.send("LTV 提醒", msg, "feishu"))
+        except Exception:
+            pass

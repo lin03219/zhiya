@@ -27,6 +27,7 @@ class NotifyConfig:
     """通知配置"""
     feishu_webhook: str = ""
     dingtalk_webhook: str = ""
+    ltv_threshold: float = 0.0  # LTV 低于此值飞书提醒
 
 
 @dataclass
@@ -148,6 +149,9 @@ class ConfigManager:
     def set_borrow_rate(self, rate: float) -> None:
         """设置借币请求速率（秒）"""
         self._config.borrow_rate = rate
+
+    def set_ltv_threshold(self, threshold: float):
+        self._config.notify.ltv_threshold = threshold
 
     def set_update_url(self, url: str) -> None:
         """设置版本检查 URL"""

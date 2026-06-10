@@ -128,7 +128,7 @@ class StakingService:
                     break
             body = {
                 "currency": loan_coin,
-                "collateralList": [{"ccy": "USDT", "amount": usdt_balance}],
+                "collateralList": [{"currency": "USDT", "amount": usdt_balance}],
             }
             result = self._client.post("/v5/crypto-loan-common/max-loan", body=body)
             max_loan = float(result.get("result", {}).get("maxLoan", "0"))
@@ -159,7 +159,7 @@ class StakingService:
             total_collateral = float(pos.get("totalCollateral", "0"))
             ltv_raw = pos.get("ltv", "")
             current_ltv = float(ltv_raw) if ltv_raw else 0.0
-            result["current_ltv"] = f"{current_ltv * 100:.1f}%"
+            result["current_ltv"] = f"{current_ltv * 100:.2f}%"
             result["total_debt"] = str(total_debt)
             result["total_collateral"] = str(total_collateral)
 
@@ -185,7 +185,7 @@ class StakingService:
             try:
                 trial = self._client.post("/v5/crypto-loan-common/max-loan", body={
                     "currency": loan_coin,
-                    "collateralList": [{"ccy": "USDT", "amount": "1"}],
+                    "collateralList": [{"currency": "USDT", "amount": "1"}],
                 })
                 if not trial.get("result", {}).get("maxLoan", ""):
                     result["coin_borrowable"] = False
@@ -201,7 +201,7 @@ class StakingService:
             result["max_amount"] = f"{max_amount:.4f}"
 
             projected_ltv = (total_debt + max_borrow_usd) / total_collateral_after
-            result["projected_ltv"] = f"{projected_ltv * 100:.1f}%"
+            result["projected_ltv"] = f"{projected_ltv * 100:.2f}%"
             result["can_borrow"] = True
         except Exception:
             pass
@@ -213,7 +213,7 @@ class StakingService:
             result = self._client.get("/v5/crypto-loan-common/position")
             ltv_raw = result.get("result", {}).get("ltv", "")
             if ltv_raw:
-                return f"{float(ltv_raw) * 100:.1f}%"
+                return f"{float(ltv_raw) * 100:.2f}%"
         except Exception:
             pass
         return "--"
@@ -291,7 +291,7 @@ class StakingService:
         try:
             body = {
                 "currency": coin,
-                "collateralList": [{"ccy": "USDT", "amount": "1"}],
+                "collateralList": [{"currency": "USDT", "amount": "1"}],
             }
             result = self._client.post("/v5/crypto-loan-common/max-loan", body=body)
             # 有返回且无报错 = 可借
