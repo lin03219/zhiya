@@ -35,7 +35,7 @@ def _fmt_usd(value: float) -> str:
     elif value >= 1:
         return f"${value:,.3f}"
     else:
-        return "$0.000"
+        return "$0.0000"
 
 
 class SettingsDialog(tk.Toplevel):
@@ -165,148 +165,101 @@ class SettingsDialog(tk.Toplevel):
 
 
 class PositionsWindow(tk.Toplevel):
-    """当前持仓弹窗 — 支持还币"""
-
-    def __init__(self, parent, service: Optional[StakingService]):
+    def __init__(self, parent, service):
         super().__init__(parent)
         self._service = service
+        self._row_frames = []
         self.title("当前持仓")
-        self.geometry("600x400")
+        self.geometry("650x420")
         self.resizable(True, True)
         self.transient(parent)
-
         self._build()
         _center_window(self, parent)
-
         if self._service:
             self._refresh()
-
     def _build(self):
-        pad = {"padx": 10, "pady": 5}
-
-        columns = ("借入币种", "欠款总额", "利率(时)", "操作")
-        self._tree = ttk.Treeview(self, columns=columns, show="headings", height=8)
-        self._tree.heading("借入币种", text="借入币种")
-        self._tree.heading("欠款总额", text="欠款总额")
-        self._tree.heading("利率(时)", text="利率(时)")
-        self._tree.heading("操作", text="操作")
-        self._tree.column("借入币种", width=100, anchor=tk.CENTER)
-        self._tree.column("欠款总额", width=130, anchor=tk.CENTER)
-        self._tree.column("利率(时)", width=100, anchor=tk.CENTER)
-        self._tree.column("操作", width=80, anchor=tk.CENTER)
-        self._tree.pack(fill=tk.BOTH, expand=True, **pad)
-
-        # 双击行也可还币
-        self._tree.bind("<Double-1>", lambda e: self._repay_selected())
-
+        pad = {"padx": 10, "pady": 3}
+        header = ttk.Frame(self)
+        header.pack(fill=tk.X, padx=10, pady=(10, 2))
+        for text, width, anchor in [("借入币种",10,tk.W),("欠款总额",14,tk.CENTER),("利率(时)",12,tk.CENTER),("操作",20,tk.CENTER)]:
+            ttk.Label(header,text=text,width=width,anchor=anchor,font=("",9,"bold")).pack(side=tk.LEFT,padx=1)
+        ttk.Separator(self,orient=tk.HORIZONTAL).pack(fill=tk.X,padx=10)
+        cf = ttk.Frame(self)
+        cf.pack(fill=tk.BOTH,expand=True,padx=10,pady=2)
+        self._canvas = tk.Canvas(cf,height=200,highlightthickness=0)
+        sb = ttk.Scrollbar(cf,orient=tk.VERTICAL,command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT,fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT,fill=tk.BOTH,expand=True)
+        self._row_container = ttk.Frame(self._canvas)
+        self._canvas.create_window((0,0),window=self._row_container,anchor=tk.NW,tags="container")
+        self._row_container.bind("<Configure>",lambda e:self._canvas.configure(scrollregion=self._canvas.bbox("all")))
         self._summary_var = tk.StringVar(value="抵押品: --  |  总欠款: --  |  LTV: --")
-        ttk.Label(self, textvariable=self._summary_var).pack(anchor=tk.W, **pad)
-
-        btn_row = ttk.Frame(self)
-        btn_row.pack(fill=tk.X, **pad)
-        ttk.Button(btn_row, text="一键还清全部", command=self._repay_all).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_row, text="还币", command=self._repay_selected).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_row, text="刷新", command=self._refresh).pack(side=tk.RIGHT)
-
+        ttk.Label(self,textvariable=self._summary_var,font=("",9)).pack(anchor=tk.W,padx=10,pady=3)
+        ttk.Separator(self,orient=tk.HORIZONTAL).pack(fill=tk.X,padx=10)
+        br = ttk.Frame(self)
+        br.pack(fill=tk.X,padx=10,pady=5)
+        ttk.Button(br,text="一键还清全部",command=self._repay_all).pack(side=tk.LEFT,padx=3)
+        ttk.Button(br,text="刷新",command=self._refresh).pack(side=tk.RIGHT)
     def _refresh(self):
         if not self._service:
             return
         try:
             pos = self._service.get_position()
-            for row in self._tree.get_children():
-                self._tree.delete(row)
-
-            bl = pos.get("borrowList", [])
-            cl = pos.get("collateralList", [])
-            total_debt = pos.get("totalDebt", "0")
-            ltv_raw = pos.get("ltv", "")
-            ltv = f"{float(ltv_raw)*100:.2f}%" if ltv_raw else "--"
-
+            for f in self._row_frames:
+                f.destroy()
+            self._row_frames.clear()
+            bl = pos.get("borrowList",[])
+            cl = pos.get("collateralList",[])
+            td = pos.get("totalDebt","0")
+            lr = pos.get("ltv","")
+            ltv = f"{float(lr)*100:.2f}%" if lr else "--"
+            if not bl:
+                ttk.Label(self._row_container,text="暂无借币持仓",foreground="gray").pack(pady=20)
             for b in bl:
-                rate = b.get("flexibleHourlyInterestRate", "0")
-                rate_pct = f"{float(rate)*100:.5f}%" if rate else "--"
-                self._tree.insert("", tk.END, values=(
-                    b.get("loanCurrency", ""),
-                    b.get("flexibleTotalDebt", "0"),
-                    rate_pct,
-                    "[还币]",
-                ))
-
-            cols = ", ".join(f"{c.get('currency','')}: {c.get('amount','')}" for c in cl) or "--"
-            self._summary_var.set(
-                f"抵押品: {cols}  |  总欠款 USD: ${total_debt}  |  LTV: {ltv}"
-            )
+                coin = b.get("loanCurrency","")
+                debt = b.get("flexibleTotalDebt","0")
+                rate = b.get("flexibleHourlyInterestRate","0")
+                rp = f"{float(rate)*100:.5f}%" if rate else "--"
+                row = ttk.Frame(self._row_container)
+                row.pack(fill=tk.X,pady=1)
+                self._row_frames.append(row)
+                ttk.Label(row,text=coin,width=10,anchor=tk.W).pack(side=tk.LEFT,padx=1)
+                ttk.Label(row,text=debt,width=14,anchor=tk.CENTER).pack(side=tk.LEFT,padx=1)
+                ttk.Label(row,text=rp,width=12,anchor=tk.CENTER).pack(side=tk.LEFT,padx=1)
+                op = ttk.Frame(row)
+                op.pack(side=tk.LEFT,padx=1,fill=tk.X,expand=True)
+                ttk.Button(op,text="划转",width=5,command=lambda c=coin:self._transfer_coin(c)).pack(side=tk.LEFT,padx=2)
+                ttk.Button(op,text="还币",width=5,command=lambda c=coin:self._repay_coin(c)).pack(side=tk.LEFT,padx=2)
+            cs = ", ".join(f"{c.get("currency","")}: {c.get("amount","")}" for c in cl) or "--"
+            self._summary_var.set(f"抵押品: {cs}  |  总欠款 USD: ${td}  |  LTV: {ltv}")
         except BybitApiError as e:
-            messagebox.showerror("查询失败", str(e), parent=self)
-
-    def _repay_selected(self):
-        sel = self._tree.selection()
-        if not sel:
-            messagebox.showwarning("提示", "请先选择一笔持仓", parent=self)
-            return
-        values = self._tree.item(sel[0])["values"]
-        coin = values[0]
-        debt = values[1]
-        self._show_repay_dialog(coin, debt)
-
-    def _show_repay_dialog(self, coin, max_amount):
-        dlg = tk.Toplevel(self)
-        dlg.title(f"还币 - {coin}")
-        dlg.geometry("300x180")
-        dlg.resizable(False, False)
-        dlg.transient(self)
-
-        # 使用原始欠款值，不做截断
-        max_rounded = str(max_amount)
-
-
-
-
-        ttk.Label(dlg, text=f"币种: {coin}\n欠款总额: {max_rounded}", padding=10).pack()
-
-        row = ttk.Frame(dlg)
-        row.pack(pady=5)
-        ttk.Label(row, text="还款数量:").pack(side=tk.LEFT)
-        amt_var = tk.StringVar(value=max_rounded)
-        amt_entry = ttk.Entry(row, textvariable=amt_var, width=14)
-        amt_entry.pack(side=tk.LEFT, padx=5)
-
-        def do_repay(amount=None):
-            amt = amount if amount else amt_var.get().strip()
-            if not amt:
-                return
-            try:
-                rid = self._service.repay_smart(coin, amt)
-                messagebox.showinfo("还款成功", f"还款ID: {rid}", parent=dlg)
-                dlg.destroy()
-                self._refresh()
-            except BybitApiError as e:
-                messagebox.showerror("还款失败", str(e), parent=dlg)
-
-        ttk.Button(row, text="确认还款", command=lambda: do_repay()).pack(side=tk.LEFT, padx=5)
-        ttk.Button(dlg, text="一键还清", command=lambda: do_repay(max_rounded)).pack(pady=5)
-
-        _center_window(dlg, self)
-
+            messagebox.showerror("查询失败",str(e),parent=self)
+    def _transfer_coin(self,coin):
+        dlg = TransferDialog(self, self._service, on_success=self._refresh)
+        dlg._coin.set(coin)
+    def _repay_coin(self,coin):
+        RepayDialog(self,self._service,coin,on_success=self._refresh)
     def _repay_all(self):
         if not self._service:
             return
-        pos = self._service.get_position()
-        bl = pos.get("borrowList", [])
-        if not bl:
-            messagebox.showinfo("提示", "没有待还持仓", parent=self)
-            return
-        msg = "\n".join(f"{b['loanCurrency']}: {b['flexibleTotalDebt']}" for b in bl)
-        if not messagebox.askyesno("一键还清全部", f"确认还清以下币种？\n\n{msg}", parent=self):
-            return
-        for b in bl:
-            try:
-                amt = str(b['flexibleTotalDebt'])
-                self._service.repay_smart(b["loanCurrency"], amt)
-            except BybitApiError as e:
-                messagebox.showerror("还币失败", f"{b['loanCurrency']}: {e}", parent=self)
-        self._refresh()
-
+        try:
+            pos = self._service.get_position()
+            bl = pos.get("borrowList",[])
+            if not bl:
+                messagebox.showinfo("提示","暂无借币持仓",parent=self)
+                return
+            for b in bl:
+                coin = b.get("loanCurrency","")
+                debt = b.get("flexibleTotalDebt","0")
+                try:
+                    self._service.repay_smart(coin,debt)
+                except Exception as e:
+                    messagebox.showerror("还币失败",f"{coin}: {e}",parent=self)
+            messagebox.showinfo("成功","全部还清",parent=self)
+            self._refresh()
+        except Exception as e:
+            messagebox.showerror("失败",str(e),parent=self)
 
 class TransferDialog(tk.Toplevel):
     """划转弹窗 — 统一账户 ↔ 资金账户"""
@@ -343,6 +296,7 @@ class TransferDialog(tk.Toplevel):
         ttk.Label(row1, text="币种:", width=6).pack(side=tk.LEFT)
         self._coin = ttk.Combobox(row1, values=["USDT", "USDC", "BTC", "ETH", "SOL"], width=12)
         self._coin.pack(side=tk.LEFT, padx=5)
+        self._coin.set("USDT")
         ttk.Label(row1, text="数量:", width=6).pack(side=tk.LEFT)
         self._amount = ttk.Entry(row1, width=14)
         self._amount.pack(side=tk.LEFT)
