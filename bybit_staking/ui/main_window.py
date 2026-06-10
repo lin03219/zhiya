@@ -33,9 +33,9 @@ def _fmt_usd(value: float) -> str:
     if value >= 10000:
         return f"${value:,.0f}"
     elif value >= 1:
-        return f"${value:,.2f}"
+        return f"${value:,.3f}"
     else:
-        return "$0.00"
+        return "$0.000"
 
 
 class SettingsDialog(tk.Toplevel):
@@ -114,6 +114,20 @@ class SettingsDialog(tk.Toplevel):
         rate_combo = ttk.Combobox(rate_frame, textvariable=self._rate_var,
             values=["0.5", "1.5", "2.5", "3.5", "4.5", "5.5"], width=10, state="readonly")
         rate_combo.pack(anchor=tk.W, pady=5)
+        # LTV 飞书提醒阈值
+        # LTV 飞书提醒阈值
+        ltv_frame = ttk.LabelFrame(self, text="LTV 飞书提醒", padding=10)
+        ltv_frame.pack(fill=tk.X, **pad)
+        ltv_row = ttk.Frame(ltv_frame)
+        ltv_row.pack(fill=tk.X)
+        ttk.Label(ltv_row, text="LTV 高于(%):").pack(side=tk.LEFT)
+        self._ltv_threshold = ttk.Entry(ltv_row, width=6)
+        self._ltv_threshold.pack(side=tk.LEFT, padx=5)
+        self._ltv_threshold.insert(0, str(self._config.notify.ltv_threshold))
+        ttk.Label(ltv_row, text="  间隔(秒):").pack(side=tk.LEFT)
+        self._ltv_interval = ttk.Entry(ltv_row, width=6)
+        self._ltv_interval.pack(side=tk.LEFT, padx=5)
+        self._ltv_interval.insert(0, str(self._config.notify.ltv_alert_interval))
 
         btn_row = ttk.Frame(self)
         btn_row.pack(fill=tk.X, pady=(10, 5), padx=10)
@@ -121,24 +135,33 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(btn_row, text="取消", command=self.destroy).pack(side=tk.RIGHT)
 
     def _save(self):
-        self._config_manager.set_api_credentials(
-            self._api_key.get().strip(),
-            self._api_secret.get().strip(),
-        )
-        self._config_manager.set_network(self._network_var.get())
-        self._config_manager.set_proxy(
-            http=self._proxy_http.get().strip(),
-            https=self._proxy_http.get().strip(),
-            enabled=self._proxy_enabled.get(),
-        )
-        self._config_manager.set_notify(
-            feishu_webhook=self._feishu.get().strip(),
-            dingtalk_webhook=self._dingtalk.get().strip(),
-        )
-        self._config_manager.set_borrow_rate(float(self._rate_var.get()))
-        self._config_manager.save()
-        self._on_save()
-        self.destroy()
+        try:
+            self._config_manager.set_api_credentials(
+                self._api_key.get().strip(),
+                self._api_secret.get().strip(),
+            )
+            self._config_manager.set_network(self._network_var.get())
+            self._config_manager.set_proxy(
+                http=self._proxy_http.get().strip(),
+                https=self._proxy_http.get().strip(),
+                enabled=self._proxy_enabled.get(),
+            )
+            self._config_manager.set_notify(
+                feishu_webhook=self._feishu.get().strip(),
+                dingtalk_webhook=self._dingtalk.get().strip(),
+            )
+            self._config_manager.set_borrow_rate(float(self._rate_var.get()))
+            ltv_str = self._ltv_threshold.get().strip()
+            if ltv_str:
+                self._config_manager.set_ltv_threshold(float(ltv_str))
+            interval = max(1, min(60, int(self._ltv_interval.get() or "60")))
+            self._config_manager.set_ltv_alert_interval(interval)
+            self._config_manager.save()
+            self._on_save()
+            self.destroy()
+        except Exception as e:
+            import tkinter.messagebox as mb
+            mb.showerror("保存失败", str(e))
 
 
 class PositionsWindow(tk.Toplevel):
@@ -197,7 +220,7 @@ class PositionsWindow(tk.Toplevel):
             cl = pos.get("collateralList", [])
             total_debt = pos.get("totalDebt", "0")
             ltv_raw = pos.get("ltv", "")
-            ltv = f"{float(ltv_raw)*100:.1f}%" if ltv_raw else "--"
+            ltv = f"{float(ltv_raw)*100:.2f}%" if ltv_raw else "--"
 
             for b in bl:
                 rate = b.get("flexibleHourlyInterestRate", "0")
@@ -392,6 +415,7 @@ class MainWindow:
         self._root.after(300, self._auto_init)
         self._last_quota_warned = False  # ??????
         self._download_url = None  # 新版本下载地址        self._root.after(1000, self._ban_check_timer)
+        self._root.after(15000, self._ltv_alert_timer)  # LTV 飞书提醒
         self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
     def _init_client(self):
@@ -1229,3 +1253,24 @@ class MainWindow:
 
     def run(self):
         self._root.mainloop()
+    def _ltv_alert_timer(self):
+        self._check_ltv_alert()
+        interval = self._config.notify.ltv_alert_interval * 1000
+        self._root.after(interval, self._ltv_alert_timer)
+
+    def _check_ltv_alert(self):
+        if not self._service or not self._notifier:
+            return
+        threshold = self._config.notify.ltv_threshold
+        if threshold <= 0:
+            return
+        try:
+            ltv_str = self._service.get_current_ltv()
+            if ltv_str == "--":
+                return
+            ltv_val = float(ltv_str.rstrip("%"))
+            if ltv_val > threshold:
+                msg = f"LTV \u8b66\u544a\uff1a\u5f53\u524d LTV {ltv_str}\uff0c\u8d85\u8fc7\u8bbe\u5b9a\u9608\u503c {threshold}%"
+                self._notifier.send("LTV \u8b66\u544a", msg, "feishu")
+        except Exception:
+            pass

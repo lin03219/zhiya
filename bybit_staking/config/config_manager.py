@@ -27,6 +27,8 @@ class NotifyConfig:
     """通知配置"""
     feishu_webhook: str = ""
     dingtalk_webhook: str = ""
+    ltv_threshold: float = 0.0
+    ltv_alert_interval: int = 60  # LTV 提醒间隔（秒）  # LTV 高于此值飞书提醒
 
 
 @dataclass
@@ -144,6 +146,14 @@ class ConfigManager:
             feishu_webhook=feishu_webhook,
             dingtalk_webhook=dingtalk_webhook,
         )
+
+    def set_ltv_threshold(self, threshold: float) -> None:
+        """设置 LTV 飞书提醒阈值"""
+        self._config.notify.ltv_threshold = threshold
+
+    def set_ltv_alert_interval(self, seconds: int) -> None:
+        """设置 LTV 提醒间隔（秒）"""
+        self._config.notify.ltv_alert_interval = seconds
 
     def set_borrow_rate(self, rate: float) -> None:
         """设置借币请求速率（秒）"""
