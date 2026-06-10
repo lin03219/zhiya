@@ -1151,7 +1151,7 @@ class MainWindow:
             req.add_header("Accept", "application/vnd.github+json")
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-            remote_ver = data.get("tag_name", "").lstrip("v")
+            remote_ver = data.get("tag_name", "").lstrip("v").split("_")[0]
             tag_name = data.get("tag_name", "")
             if remote_ver and remote_ver != VERSION:
                 dl_url = f"https://github.com/lin03219/zhiya/releases/download/{tag_name}/BybitStaking.exe"
