@@ -153,19 +153,37 @@ class BybitClient:
             full_url = f"{url}?{query_string}" if query_string else url
             sign = self._sign(timestamp, query_string)
             data = None
+            headers = {
+                "X-BAPI-API-KEY": self._config.api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-SIGN": sign,
+                "X-BAPI-RECV-WINDOW": str(self.RECV_WINDOW),
+                "Content-Type": "application/json",
+            }
+        elif method == "POST_FORM":
+            query_string = urllib.parse.urlencode(params or {})
+            full_url = url
+            sign = self._sign(timestamp, query_string)
+            data = query_string.encode("utf-8")
+            headers = {
+                "X-BAPI-API-KEY": self._config.api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-SIGN": sign,
+                "X-BAPI-RECV-WINDOW": str(self.RECV_WINDOW),
+                "Content-Type": "application/json",
+            }
         else:
             full_url = url
             body_json = json.dumps(body or {})
             sign = self._sign(timestamp, body_json)
             data = body_json.encode("utf-8")
-
-        headers = {
-            "X-BAPI-API-KEY": self._config.api_key,
-            "X-BAPI-TIMESTAMP": timestamp,
-            "X-BAPI-SIGN": sign,
-            "X-BAPI-RECV-WINDOW": str(self.RECV_WINDOW),
-            "Content-Type": "application/json",
-        }
+            headers = {
+                "X-BAPI-API-KEY": self._config.api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-SIGN": sign,
+                "X-BAPI-RECV-WINDOW": str(self.RECV_WINDOW),
+                "Content-Type": "application/json",
+            }
 
         req = urllib.request.Request(full_url, data=data, headers=headers, method=method)
 
@@ -210,3 +228,31 @@ class BybitClient:
     def post(self, endpoint: str, body: Optional[dict] = None, use_full_url: bool = False) -> dict:
         """POST 请求"""
         return self._request("POST", endpoint, body=body, use_full_url=use_full_url)
+
+    def post_form(self, endpoint: str, params: dict) -> dict:
+        """POST 请求（URL 编码格式，用于闪兑等接口）"""
+        return self._request("POST_FORM", endpoint, params=params)
+
+    # ==================== 闪兑 API ====================
+
+    def get_exchange_coins(self, account_type: str = "UNIFIED") -> dict:
+        """获取可兑换币种列表"""
+        return self.get("/v5/asset/exchange/query-coin-list", {
+            "accountType": account_type,
+        })
+
+    def get_exchange_quote(self, from_coin: str, to_coin: str, amount: str) -> dict:
+        """获取闪兑换报价"""
+        return self.post_form("/v5/asset/exchange/quote-apply", {
+            "fromCoin": from_coin,
+            "toCoin": to_coin,
+            "requestCoin": from_coin,
+            "requestAmount": amount,
+            "accountType": "UNIFIED",
+        })
+
+    def submit_exchange(self, quote_tx_id: str) -> dict:
+        """提交闪兑换订单"""
+        return self.post_form("/v5/asset/exchange/convert-execute", {
+            "quoteTxId": quote_tx_id,
+        })

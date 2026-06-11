@@ -13,6 +13,8 @@ from ..config.config_manager import ConfigManager, AppConfig
 from ..version import VERSION, UPDATE_URL, RELEASES_URL
 from ..api.bybit_client import BybitClient, BybitApiError, VpnStatus, ApiRateLimit
 from ..business.staking_service import StakingService
+from ..business.exchange_service import ExchangeService
+from .exchange_window import ExchangeWindow
 from ..notify.notifier import Notifier
 
 
@@ -593,6 +595,7 @@ class MainWindow:
 
         ttk.Button(actions, text="当前持仓", command=self._open_positions).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions, text="账内划转", command=self._open_transfer).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions, text="闪兑", command=self._open_exchange).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions, text="查询利率", command=self._show_interest).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions, text="测试连接", command=self._test_connection).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions, text="全部刷新", command=self._refresh_all).pack(side=tk.RIGHT, padx=3)
@@ -658,6 +661,13 @@ class MainWindow:
 
     def _open_transfer(self):
         TransferDialog(self._root, self._service, on_success=self._refresh_all)
+
+    def _open_exchange(self):
+        if not self._client:
+            messagebox.showwarning("提示", "请先配置 API 密钥")
+            return
+        exchange_svc = ExchangeService(self._client)
+        ExchangeWindow(self._root, exchange_svc)
 
     def _show_interest(self):
         if not self._service:
