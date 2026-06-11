@@ -1257,7 +1257,7 @@ class MainWindow:
                 "chcp 65001 >nul\n"
                 "echo Waiting for app to close...\n"
                 "timeout /t 3 /nobreak >nul\n"
-                "taskkill /f /im BybitStaking.exe 2>nul\n"
+                "taskkill /f /pid 15756 2>nul\n"
                 "timeout /t 3 /nobreak >nul\n"
                 "set RETRY=0\n"
                 ":retry\n"
