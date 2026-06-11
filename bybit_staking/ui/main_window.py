@@ -5,6 +5,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
+import ctypes
+import ctypes.wintypes
 from typing import Optional
 
 from ..config.config_manager import ConfigManager, AppConfig
@@ -388,6 +390,18 @@ class MainWindow:
         self._root.geometry("900x580")
         self._root.minsize(800, 520)
 
+        # 单实例检测：如果已有实例运行，激活它并退出
+        import ctypes as _ct
+        _mutex = _ct.windll.kernel32.CreateMutexW(None, False, "BybitStakingApp_SingleInstance")
+        if _ct.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            prev = _ct.windll.user32.FindWindowW(None, "Bybit 质押借币")
+            if prev:
+                _ct.windll.user32.ShowWindow(prev, 9)  # SW_RESTORE
+                _ct.windll.user32.SetForegroundWindow(prev)
+            self._root.destroy()
+            import sys as _sys
+            _sys.exit(0)
+
         self._root.update_idletasks()
         sw = self._root.winfo_screenwidth()
         sh = self._root.winfo_screenheight()
@@ -405,9 +419,16 @@ class MainWindow:
 
         self._build_ui()
         self._root.after(300, self._auto_init)
-        self._last_quota_warned = False  # ??????
+        # 系统托盘
+        self._tray_added = False
+        self._tray_hwnd = None
+        self._orig_wndproc = None
+        self._root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
+        self._last_quota_warned = False
+        self._root.after(1000, self._check_minimize)  # 轮询检测最小化  # ??????
         self._download_url = None  # 新版本下载地址        self._root.after(1000, self._ban_check_timer)
         self._root.after(15000, self._ltv_alert_timer)  # LTV 飞书提醒
+        self._root.after(2000, self._ltv_display_timer)  # LTV 屏幕刷新（2秒起步）
         self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
     def _init_client(self):
@@ -1075,8 +1096,9 @@ class MainWindow:
         threading.Thread(target=safe_run, daemon=True).start()
 
     def _auto_init(self):
-        """启动后自动：测试连接 + 刷新余额"""
+        """启动后自动：测试连接 + 刷新余额 + 启动托盘"""
         self._run_async(self._do_auto_init)
+        self._init_tray()
 
     def _do_auto_init(self):
         # 测 VPN
@@ -1146,6 +1168,15 @@ class MainWindow:
             self._root.after(0, lambda: self._ltv_var.set(ltv))
         except Exception:
             pass
+    def _ltv_display_timer(self):
+        """LTV 定时刷新：借币循环中每10秒，非借币每2秒"""
+        self._run_async(self._refresh_ltv)
+        if self._borrow_looping:
+            interval = 10000  # 10秒，借币消耗 40 + LTV 6 = 46/50
+        else:
+            interval = 2000   # 2秒，非借币 LTV 30/50 安全
+        self._root.after(interval, self._ltv_display_timer)
+
 
     def _check_update(self):
         """后台检查更新 + 每30分钟重试"""
@@ -1176,6 +1207,7 @@ class MainWindow:
                 self._root.after(0, lambda: self._update_btn.config(text=f"v{remote_ver} 可用"))
         except Exception:
             pass
+
     def _open_update_url(self):
         """下载新版本并自动替换"""
         if not self._download_url:
@@ -1243,8 +1275,68 @@ class MainWindow:
         except Exception as e:
             self._root.after(0, lambda e=e: self._set_status(f"Update failed: {e}"))
 
+        # ====== 系统托盘 ======
+    def _init_tray(self):
+        """启动时创建托盘图标并持续运行"""
+        import pystray
+        from PIL import Image, ImageDraw
+        import threading
+
+        # 创建图标
+        img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([6, 6, 58, 58], fill=(59, 130, 246))
+        draw.text((20, 18), 'B', fill=(255, 255, 255))
+
+        self._tray_icon = pystray.Icon(
+            'bybit_staking',
+            img,
+            'Bybit 质押借币',
+            menu=pystray.Menu(
+                pystray.MenuItem('显示主窗口', self._tray_show, default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem('退出', self._tray_exit),
+            ),
+        )
+        # 后台线程持续运行
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _tray_show(self, icon=None, item=None):
+        """从托盘恢复主窗口"""
+        self._root.after(0, self._restore_from_tray)
+
+    def _tray_exit(self, icon=None, item=None):
+        """退出应用"""
+        self._root.after(0, self._root.destroy)
+
+    def _minimize_to_tray(self):
+        """最小化/关闭 → 隐藏到托盘（托盘一直在运行）"""
+        self._root.withdraw()
+
+    def _restore_from_tray(self):
+        """从托盘恢复窗口"""
+        self._root.deiconify()
+        self._root.lift()
+        self._root.focus_force()
+
+    def _check_minimize(self):
+        """轮询检测最小化状态"""
+        try:
+            if self._root.state() == "iconic":
+                self._minimize_to_tray()
+        except Exception:
+            pass
+        self._root.after(500, self._check_minimize)
+
     def run(self):
-        self._root.mainloop()
+        try:
+            self._root.mainloop()
+        finally:
+            try:
+                if hasattr(self, '_tray_icon') and self._tray_icon:
+                    self._tray_icon.stop()
+            except Exception:
+                pass
     def _ltv_alert_timer(self):
         self._check_ltv_alert()
         interval = self._config.notify.ltv_alert_interval * 1000
