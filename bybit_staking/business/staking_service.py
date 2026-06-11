@@ -179,7 +179,7 @@ class StakingService:
                 return result
 
             max_debt = total_collateral_after * 0.80
-            max_borrow_usd = max_debt - total_debt
+            max_borrow_usd = max_debt  # 不管已有负债，纯按资金账户USDT算新额度
             if max_borrow_usd <= 0:
                 return result
             result["max_amount_usd"] = f"{max_borrow_usd:.2f}"
@@ -203,7 +203,7 @@ class StakingService:
             max_amount = max_borrow_usd / price
             result["max_amount"] = f"{max_amount:.4f}"
 
-            projected_ltv = (total_debt + max_borrow_usd) / total_collateral_after
+            projected_ltv = 0.80  # 新借款按80%LTV计算，不管已有负债
             result["projected_ltv"] = f"{projected_ltv * 100:.2f}%"
             result["can_borrow"] = True
         except Exception:
