@@ -1,4 +1,4 @@
-"""
+﻿"""
 配置管理模块
 负责 API 密钥、代理设置、网络切换的持久化存储
 """
@@ -28,7 +28,16 @@ class NotifyConfig:
     feishu_webhook: str = ""
     dingtalk_webhook: str = ""
     ltv_threshold: float = 0.0
-    ltv_alert_interval: int = 60  # LTV 提醒间隔（秒）  # LTV 高于此值飞书提醒
+    ltv_alert_interval: int = 60  # LTV 提醒间隔（秒）
+
+
+@dataclass
+class ProtectConfig:
+    """自动保护配置"""
+    enabled: bool = False               # 总开关
+    trigger_ltv: float = 70.0           # LTV 高于此值触发追加抵押（%）
+    per_transfer_amount: str = "100"    # 单笔划转金额（USDT）
+    min_unified_balance: str = "500"    # 统一账户最低余额，低于此值停止划转
 
 
 @dataclass
@@ -39,6 +48,7 @@ class AppConfig:
     network: str = "mainnet"           # mainnet / testnet
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    protect: ProtectConfig = field(default_factory=ProtectConfig)
     borrow_rate: float = 2.5           # 借币请求间隔（秒）
     update_url: str = ""               # 版本检查 URL（JSON 含 version 字段）
 
@@ -100,6 +110,15 @@ class ConfigManager:
             self._config.notify = NotifyConfig(
                 feishu_webhook=notify_data.get("feishu_webhook", ""),
                 dingtalk_webhook=notify_data.get("dingtalk_webhook", ""),
+                ltv_threshold=float(notify_data.get("ltv_threshold", 0)),
+                ltv_alert_interval=int(notify_data.get("ltv_alert_interval", 60)),
+            )
+            protect_data = data.get("protect", {})
+            self._config.protect = ProtectConfig(
+                enabled=bool(protect_data.get("enabled", False)),
+                trigger_ltv=float(protect_data.get("trigger_ltv", 70)),
+                per_transfer_amount=str(protect_data.get("per_transfer_amount", "100")),
+                min_unified_balance=str(protect_data.get("min_unified_balance", "500")),
             )
             self._config.borrow_rate = float(data.get("borrow_rate", 2.5))
             self._config.update_url = data.get("update_url", "")
@@ -115,6 +134,7 @@ class ConfigManager:
             "network": self._config.network,
             "proxy": asdict(self._config.proxy),
             "notify": asdict(self._config.notify),
+            "protect": asdict(self._config.protect),
             "borrow_rate": self._config.borrow_rate,
             "update_url": self._config.update_url,
         }
@@ -162,3 +182,10 @@ class ConfigManager:
     def set_update_url(self, url: str) -> None:
         """设置版本检查 URL"""
         self._config.update_url = url
+
+    def set_protect(self, enabled: bool, trigger_ltv: float, per_transfer_amount: str, min_unified_balance: str) -> None:
+        """设置自动保护参数"""
+        self._config.protect.enabled = enabled
+        self._config.protect.trigger_ltv = trigger_ltv
+        self._config.protect.per_transfer_amount = per_transfer_amount
+        self._config.protect.min_unified_balance = min_unified_balance

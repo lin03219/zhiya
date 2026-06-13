@@ -102,7 +102,7 @@ class Notifier:
         loan_amount: str,
     ) -> dict[str, bool]:
         """质押成功通知"""
-        title = "✅ 质押借币成功"
+        title = "\u2705 质押借币成功"
         content = (
             f"**订单号**: {order_id}\n"
             f"**质押币种**: {collateral_coin}\n"
@@ -112,3 +112,33 @@ class Notifier:
             f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         return self.send(title, content, platform="all")
+
+    def send_protect_success(
+        self,
+        transfer_amount: str,
+        current_ltv: str,
+    ) -> dict[str, bool]:
+        """保护追加抵押成功通知"""
+        title = "\U0001f6e1 保护追加抵押成功"
+        content = (
+            f"**操作**: 自动追加抵押\n"
+            f"**划转金额**: {transfer_amount} USDT\n"
+            f"**当前 LTV**: {current_ltv}\n"
+            f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        return self.send(title, content, platform="feishu")
+
+    def send_protect_fail(
+        self,
+        reason: str,
+        current_ltv: str,
+    ) -> dict[str, bool]:
+        """保护追加抵押失败告警"""
+        title = "\u26a0\ufe0f 保护追加抵押失败"
+        content = (
+            f"**失败原因**: {reason}\n"
+            f"**当前 LTV**: {current_ltv}\n"
+            f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"\u2757 请及时检查账户余额，手动追加抵押"
+        )
+        return self.send(title, content, platform="feishu")

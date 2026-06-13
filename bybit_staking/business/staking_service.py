@@ -1,4 +1,4 @@
-"""
+﻿"""
 质押借币业务模块
 支持质押、借币、还款、持仓/订单查询、利息查询、余额查询、账内划转
 """
@@ -403,3 +403,12 @@ class StakingService:
         """查询质押品信息"""
         result = self._client.get("/v5/crypto-loan-flexible/collateral-info")
         return result.get("result", {})
+    def adjust_collateral(self, currency: str, amount: str, direction: str = "0") -> str:
+        """追加或减少抵押品（direction: 0=追加 / 1=减少）"""
+        body = {
+            "currency": currency,
+            "amount": amount,
+            "direction": direction,
+        }
+        result = self._client.post("/v5/crypto-loan-common/adjust-ltv", body=body)
+        return result.get("result", {}).get("adjustId", "")

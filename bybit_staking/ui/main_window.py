@@ -14,6 +14,7 @@ from ..version import VERSION, UPDATE_URL, RELEASES_URL
 from ..api.bybit_client import BybitClient, BybitApiError, VpnStatus, ApiRateLimit
 from ..business.staking_service import StakingService
 from ..business.exchange_service import ExchangeService
+from ..business.protect_service import ProtectService
 from .exchange_window import ExchangeWindow
 from ..notify.notifier import Notifier
 
@@ -116,7 +117,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(rate_frame, text="选择请求间隔（实际会在此基础上加 0.01~0.5 秒随机浮动）:").pack(anchor=tk.W)
         self._rate_var = tk.StringVar(value=str(self._config.borrow_rate))
         rate_combo = ttk.Combobox(rate_frame, textvariable=self._rate_var,
-            values=["0.5", "1.5", "2.5", "3.5", "4.5", "5.5"], width=10, state="readonly")
+            values=["1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0"], width=10, state="readonly")
         rate_combo.pack(anchor=tk.W, pady=5)
         # LTV 飞书提醒阈值
         # LTV 飞书提醒阈值
@@ -374,6 +375,87 @@ class TransferDialog(tk.Toplevel):
         except BybitApiError as e:
             messagebox.showerror("划转失败", str(e), parent=self)
 
+
+class ProtectDialog(tk.Toplevel):
+    """保护参数设置弹窗"""
+
+    def __init__(self, parent, config_manager: ConfigManager, on_save_callback):
+        super().__init__(parent)
+        self._config_manager = config_manager
+        self._config = config_manager.get_config()
+        self._on_save = on_save_callback
+
+        self.title("保护设置")
+        self.resizable(False, False)
+        self.transient(parent)
+
+        self._build()
+        _center_window(self, parent)
+
+    def _build(self):
+        pad = {"padx": 10, "pady": 5}
+
+        sw_frame = ttk.Frame(self)
+        sw_frame.pack(fill=tk.X, **pad)
+        self._enabled_var = tk.BooleanVar(value=self._config.protect.enabled)
+        ttk.Checkbutton(sw_frame, text="启用自动保护", variable=self._enabled_var).pack(anchor=tk.W)
+
+        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
+
+        trigger_frame = ttk.LabelFrame(self, text="触发条件", padding=10)
+        trigger_frame.pack(fill=tk.X, **pad)
+
+        ttk.Label(trigger_frame, text="LTV 高于 (%):").pack(anchor=tk.W)
+        self._trigger_ltv = ttk.Entry(trigger_frame, width=10)
+        self._trigger_ltv.pack(anchor=tk.W, pady=2)
+        self._trigger_ltv.insert(0, str(self._config.protect.trigger_ltv))
+        ttk.Label(trigger_frame, text="主页 LTV 超过此值自动追加抵押", foreground="#9ca3af",
+                  font=("", 8)).pack(anchor=tk.W)
+
+        transfer_frame = ttk.LabelFrame(self, text="划转参数", padding=10)
+        transfer_frame.pack(fill=tk.X, **pad)
+
+        ttk.Label(transfer_frame, text="单笔划转金额 (USDT):").pack(anchor=tk.W)
+        self._per_amount = ttk.Entry(transfer_frame, width=15)
+        self._per_amount.pack(anchor=tk.W, pady=2)
+        self._per_amount.insert(0, self._config.protect.per_transfer_amount)
+        ttk.Label(transfer_frame, text="每次自动划转并追加抵押的 USDT 数量", foreground="#9ca3af",
+                  font=("", 8)).pack(anchor=tk.W)
+
+        ttk.Label(transfer_frame, text="统一账户最低余额 (USDT):").pack(anchor=tk.W, pady=(8, 0))
+        self._min_balance = ttk.Entry(transfer_frame, width=15)
+        self._min_balance.pack(anchor=tk.W, pady=2)
+        self._min_balance.insert(0, self._config.protect.min_unified_balance)
+        ttk.Label(transfer_frame, text="统一账户 USDT 低于此值则停止划转, 飞书告警",
+                  foreground="#9ca3af", font=("", 8)).pack(anchor=tk.W)
+
+        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
+        note = ttk.Label(self, text="⚠ 每次 LTV 刷新检测到超标即触发, 成功或失败均飞书通知",
+                         foreground="#d97706", font=("", 8), wraplength=300)
+        note.pack(fill=tk.X, padx=10, pady=(0, 5))
+
+        btn_row = ttk.Frame(self)
+        btn_row.pack(fill=tk.X, pady=(0, 5), padx=10)
+        ttk.Button(btn_row, text="保存", command=self._save).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_row, text="取消", command=self.destroy).pack(side=tk.RIGHT)
+
+    def _save(self):
+        try:
+            trigger_ltv = float(self._trigger_ltv.get().strip() or "70")
+            per_amount = self._per_amount.get().strip() or "100"
+            min_balance = self._min_balance.get().strip() or "500"
+            enabled = self._enabled_var.get()
+
+            self._config_manager.set_protect(enabled, trigger_ltv, per_amount, min_balance)
+            self._config_manager.save()
+            self._on_save()
+            self.destroy()
+        except ValueError:
+            messagebox.showerror("保存失败", "请输入有效的数值", parent=self)
+        except Exception as e:
+            messagebox.showerror("保存失败", str(e), parent=self)
+
+
 class MainWindow:
     """主窗口 — 简洁版"""
 
@@ -411,6 +493,7 @@ class MainWindow:
         self._root.geometry(f"{ww}x{wh}+{(sw - ww) // 2}+{(sh - wh) // 2}")
 
         self._borrow_looping = False
+        self._protect_service = None
         self._BORROW_ERROR_MAP = {
             148012: "抵押品(USDT)余额不足",
             148011: "借币池余额不足",
@@ -438,6 +521,7 @@ class MainWindow:
             self._client = BybitClient(self._config)
             self._service = StakingService(self._client)
             self._notifier = Notifier(self._config.notify)
+            self._protect_service = ProtectService(self._client, self._config.protect, self._notifier)
 
     def _reinit_client(self):
         self._config = self._config_manager.get_config()
@@ -531,7 +615,8 @@ class MainWindow:
         # 版本号
         ttk.Label(f, text=f"v{VERSION}", foreground="#9ca3af", font=("", 7)).pack(pady=(10, 0))
         ttk.Button(f, text="检查更新", width=8, command=self._check_update).pack()
-        ttk.Button(f, text="设置", command=self._open_settings).pack(pady=10)
+        ttk.Button(f, text="设置", command=self._open_settings).pack(pady=(10, 0))
+        ttk.Button(f, text="保护", command=self._open_protect).pack(pady=(2, 10))
 
     def _build_right_panel(self):
         pad = {"pady": 5}
@@ -655,6 +740,9 @@ class MainWindow:
 
     def _open_settings(self):
         SettingsDialog(self._root, self._config_manager, self._reinit_client)
+
+    def _open_protect(self):
+        ProtectDialog(self._root, self._config_manager, self._reinit_client)
 
     def _open_positions(self):
         PositionsWindow(self._root, self._service)
@@ -1172,12 +1260,28 @@ class MainWindow:
                     self._set_status("")  # ???????
 
     def _refresh_ltv(self):
-        """仅刷新 LTV（轻量，不拉全部数据）"""
+        """刷新 LTV 并触发保护检查"""
         try:
             ltv = self._service.get_current_ltv()
             self._root.after(0, lambda: self._ltv_var.set(ltv))
+            # 自动保护检查
+            self._run_async(lambda l=ltv: self._check_protect(l))
         except Exception:
             pass
+    def _check_protect(self, ltv_str):
+        """自动保护：LTV 超标时划转并追加抵押"""
+        if not self._protect_service:
+            return
+        try:
+            result = self._protect_service.checkAndProtect(ltv_str)
+            if result:
+                self._root.after(0, lambda r=result: self._set_status(f"保护: {r}"))
+                print(f"[保护] 结果: {result}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._root.after(0, lambda e=e: self._set_status(f"保护异常: {e}"))
+
     def _ltv_display_timer(self):
         """LTV 定时刷新：借币循环中每10秒，非借币每2秒"""
         self._run_async(self._refresh_ltv)
@@ -1294,6 +1398,8 @@ class MainWindow:
         # ====== 系统托盘 ======
     def _init_tray(self):
         """启动时创建托盘图标并持续运行"""
+        if hasattr(self, '_tray_icon') and self._tray_icon is not None:
+            return
         import pystray
         from PIL import Image, ImageDraw
         import threading
