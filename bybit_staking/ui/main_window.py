@@ -1459,8 +1459,14 @@ class MainWindow:
             else:
                 current_exe = os.path.abspath(__file__)
             exe_dir = os.path.dirname(current_exe)
-            new_exe = os.path.join(exe_dir, "BybitStaking_new.exe")
-            old_exe = current_exe if current_exe.endswith(".exe") else os.path.join(exe_dir, "BybitStaking.exe")
+            # 使用实际 EXE 文件名而非写死名称
+            if current_exe.endswith(".exe"):
+                old_exe = current_exe
+                base_name = os.path.splitext(os.path.basename(current_exe))[0]
+                new_exe = os.path.join(exe_dir, base_name + "_new.exe")
+            else:
+                old_exe = os.path.join(exe_dir, "BybitStaking.exe")
+                new_exe = os.path.join(exe_dir, "BybitStaking_new.exe")
 
             self._root.after(0, lambda: self._set_status("下载中..."))
             req = urllib.request.Request(dl_url)
@@ -1485,27 +1491,31 @@ class MainWindow:
             self._root.after(0, lambda: self._set_status("下载完成，正在安装..."))
             updater = os.path.join(exe_dir, "_updater.bat")
             q = chr(34)
+            # 杀掉所有旧进程（包括可能残留的同名进程）
+            exe_name = os.path.basename(old_exe)
             bat = (
                 "@echo off\n"
                 "chcp 65001 >nul\n"
                 "echo Waiting for app to close...\n"
-                "timeout /t 3 /nobreak >nul\n"
+                "timeout /t 2 /nobreak >nul\n"
+                f"taskkill /f /im {q}{exe_name}{q} 2>nul\n"
                 f"taskkill /f /pid {os.getpid()} 2>nul\n"
-                "timeout /t 3 /nobreak >nul\n"
+                "timeout /t 2 /nobreak >nul\n"
                 "set RETRY=0\n"
                 ":retry\n"
                 f"move /y {q}{new_exe}{q} {q}{old_exe}{q} 2>nul\n"
-                f"if exist {q}{new_exe}{q} (\n"
+                f"if errorlevel 1 (\n"
+                "    echo Retry move...\n"
                 "    set /a RETRY+=1\n"
-                "    if %RETRY% LSS 10 (\n"
-                "        timeout /t 1 /nobreak >nul\n"
+                "    if %RETRY% LSS 15 (\n"
+                "        timeout /t 2 /nobreak >nul\n"
                 "        goto retry\n"
                 "    )\n"
                 ")\n"
-                f"if exist {q}{new_exe}{q} start {q}{q} {q}{new_exe}{q}\n"
-                f"if not exist {q}{new_exe}{q} start {q}{q} {q}{old_exe}{q}\n"
+                f"echo Starting {exe_name}...\n"
+                f"start {q}{q} {q}{old_exe}{q}\n"
                 "echo Update done\n"
-                f"del {q}%~f0{q}"
+                f"del {q}%~f0{q} 2>nul"
             )
             with open(updater, "w", encoding="utf-8") as f:
                 f.write(bat)
