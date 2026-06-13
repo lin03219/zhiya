@@ -43,6 +43,80 @@ def _fmt_usd(value: float) -> str:
         return "$0.0000"
 
 
+
+class LtvCorrectDialog(tk.Toplevel):
+    """LTV 自动纠错参数设置弹窗"""
+    def __init__(self, parent, config_manager):
+        super().__init__(parent)
+        self._config = config_manager.get_config()
+        self._cm = config_manager
+        self.title("LTV 自动纠错")
+        self.resizable(False, False)
+        self.transient(parent)
+        self._build()
+        _center_window(self, parent)
+
+    def _build(self):
+        pad = {"padx": 10, "pady": 5}
+        cfg = self._config.ltv_correct
+        f = ttk.Frame(self, padding=10)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        # 总开关
+        self._enabled = tk.BooleanVar(value=cfg.enabled)
+        ttk.Checkbutton(f, text="启用 LTV 自动纠错", variable=self._enabled).pack(anchor=tk.W, **pad)
+
+        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # 连续失败触发次数
+        r1 = ttk.Frame(f)
+        r1.pack(fill=tk.X, **pad)
+        ttk.Label(r1, text="连续 LTV 超限次数:", width=18).pack(side=tk.LEFT)
+        self._trigger_count = ttk.Spinbox(r1, from_=1, to=5, width=8)
+        self._trigger_count.pack(side=tk.LEFT)
+        self._trigger_count.delete(0, tk.END)
+        self._trigger_count.insert(0, str(cfg.trigger_count))
+
+        # 等待时间
+        r2 = ttk.Frame(f)
+        r2.pack(fill=tk.X, **pad)
+        ttk.Label(r2, text="停止等待(秒):", width=18).pack(side=tk.LEFT)
+        self._wait_seconds = ttk.Spinbox(r2, from_=1, to=60, width=8)
+        self._wait_seconds.pack(side=tk.LEFT)
+        self._wait_seconds.delete(0, tk.END)
+        self._wait_seconds.insert(0, str(cfg.wait_seconds))
+
+        # 冗余比例
+        r3 = ttk.Frame(f)
+        r3.pack(fill=tk.X, **pad)
+        ttk.Label(r3, text="纠错后冗余比例(%):", width=18).pack(side=tk.LEFT)
+        self._redundancy = ttk.Spinbox(r3, from_=50, to=100, width=8)
+        self._redundancy.pack(side=tk.LEFT)
+        self._redundancy.delete(0, tk.END)
+        self._redundancy.insert(0, str(cfg.redundancy_ratio))
+
+        # 自动发起
+        self._auto_restart = tk.BooleanVar(value=cfg.auto_restart)
+        ttk.Checkbutton(f, text="重新计算后自动发起借币", variable=self._auto_restart).pack(anchor=tk.W, **pad)
+
+        # 保存按钮
+        ttk.Button(f, text="保存", command=self._on_save).pack(pady=(10, 0))
+
+    def _on_save(self):
+        try:
+            self._cm.set_ltv_correct(
+                enabled=self._enabled.get(),
+                trigger_count=int(self._trigger_count.get()),
+                wait_seconds=int(self._wait_seconds.get()),
+                auto_restart=self._auto_restart.get(),
+                redundancy_ratio=float(self._redundancy.get()),
+            )
+            self._cm.save()
+            self.destroy()
+        except Exception as e:
+            import tkinter.messagebox as mb
+            mb.showerror("保存失败", str(e))
+
 class SettingsDialog(tk.Toplevel):
     """设置弹窗（非模态）"""
 
@@ -648,7 +722,9 @@ class MainWindow:
         btn_row = ttk.Frame(form)
         btn_row.pack(pady=(8, 0))
         self._borrow_btn = ttk.Button(btn_row, text="发起借币", command=self._do_borrow)
-        self._borrow_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self._borrow_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self._ltv_correct_btn = ttk.Button(btn_row, text="⚙", width=3, command=self._open_ltv_correct)
+        self._ltv_correct_btn.pack(side=tk.LEFT, padx=(0, 10))
         self._ack_btn = tk.Button(btn_row, text="已借到", fg="white", bg="#dc2626",
                                    font=("", 9, "bold"), command=self._on_ack_borrow)
         self._ltv_ok = False
@@ -1009,6 +1085,11 @@ class MainWindow:
     def _do_calc_collateral(self, loan_coin, loan_amt):
         self._do_auto_calc(loan_coin, loan_amt)
 
+
+    def _open_ltv_correct(self):
+        """打开 LTV 自动纠错参数设置"""
+        LtvCorrectDialog(self._root, self._config_manager)
+
     def _do_borrow(self):
         if self._borrow_looping:
             self._borrow_looping = False
@@ -1106,6 +1187,19 @@ class MainWindow:
                     ltv_fail_count += 1
                 else:
                     ltv_fail_count = 0
+                # LTV 自动纠错检查
+                ltv_cfg = self._config_manager.get_config().ltv_correct
+                if ltv_cfg.enabled and ltv_fail_count >= ltv_cfg.trigger_count:
+                    self._borrow_looping = False
+                    self._root.after(0, lambda: self._borrow_btn.config(text="发起借币"))
+                    self._root.after(0, lambda c=ltv_fail_count, w=ltv_cfg.wait_seconds:
+                        self._set_status(f"⚠ LTV超限{c}次，{w}秒后自动重算..."))
+                    self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, r=reason:
+                        self._log_local(n, "超限停止", lc, la, "触发自动纠错"))
+                    _time.sleep(ltv_cfg.wait_seconds)
+                    self._root.after(0, lambda: self._do_auto_recalc(ltv_cfg.redundancy_ratio, ltv_cfg.auto_restart))
+                    return
+                # LTV 超限飞书提醒（纠错未启用或不满足触发条件时）
                 self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, r=reason:
                     self._log_local(n, "借入\u274c", lc, la, r))
                 self._root.after(0, lambda a=attempt, r=reason:
@@ -1127,6 +1221,31 @@ class MainWindow:
             delay = base_rate + random.uniform(0.01, 0.5)
             _time.sleep(delay)
 
+
+
+    def _do_auto_recalc(self, redundancy_ratio, auto_restart):
+        """LTV 自动纠错：重新计算并可选自动发起借币"""
+        try:
+            coin = self._loan_coin.get().strip().upper()
+            if not coin:
+                self._set_status("⚠ 纠错失败: 未输入币种")
+                return
+            result = self._service.calculate_collateral(coin, "1")
+            max_loan = float(result.get("max_loan", "0"))
+            if max_loan <= 0:
+                self._set_status("⚠ 纠错: 该币种不可借或最大可借为0")
+                return
+            # 应用冗余比例
+            safe_amount = max_loan * (redundancy_ratio / 100.0)
+            safe_str = str(int(safe_amount))
+            self._root.after(0, lambda: self._loan_amount.delete(0, tk.END))
+            self._root.after(0, lambda: self._loan_amount.insert(0, safe_str))
+            self._root.after(0, lambda: self._calc_var.set(f"已纠错: 最大{max_loan:.0f} → 填入{safe_str}({redundancy_ratio}%)"))
+            self._root.after(0, lambda: self._set_status(f"✅ 纠错完成: 填入 {safe_str} ({redundancy_ratio}%冗余)"))
+            if auto_restart:
+                self._root.after(500, self._do_borrow)
+        except Exception as e:
+            self._root.after(0, lambda e=e: self._set_status(f"⚠ 纠错异常: {e}"))
 
     def _show_borrow_success(self, order_id, attempt, col_coin, col_amt, loan_coin, loan_amt):
         """借币成功：显示红色按钮 + 循环飞书通知"""

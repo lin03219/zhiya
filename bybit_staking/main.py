@@ -6,7 +6,7 @@ import os
 import tkinter as tk
 from tkinter import messagebox
 
-from .auth import checkAuth
+from auth import checkAuth
 from .ui.main_window import MainWindow
 
 

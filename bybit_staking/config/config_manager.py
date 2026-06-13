@@ -41,6 +41,16 @@ class ProtectConfig:
 
 
 @dataclass
+class LtvCorrectConfig:
+    """LTV 自动纠错续借配置"""
+    enabled: bool = True
+    trigger_count: int = 1
+    wait_seconds: int = 5
+    auto_restart: bool = True
+    redundancy_ratio: float = 85.0
+
+
+@dataclass
 class AppConfig:
     """应用总配置"""
     api_key: str = ""
@@ -49,6 +59,7 @@ class AppConfig:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     protect: ProtectConfig = field(default_factory=ProtectConfig)
+    ltv_correct: LtvCorrectConfig = field(default_factory=LtvCorrectConfig)
     borrow_rate: float = 2.5           # 借币请求间隔（秒）
     update_url: str = ""               # 版本检查 URL（JSON 含 version 字段）
 
@@ -120,6 +131,14 @@ class ConfigManager:
                 per_transfer_amount=str(protect_data.get("per_transfer_amount", "100")),
                 min_unified_balance=str(protect_data.get("min_unified_balance", "500")),
             )
+            ltv_correct_data = data.get("ltv_correct", {})
+            self._config.ltv_correct = LtvCorrectConfig(
+                enabled=bool(ltv_correct_data.get("enabled", True)),
+                trigger_count=int(ltv_correct_data.get("trigger_count", 1)),
+                wait_seconds=int(ltv_correct_data.get("wait_seconds", 5)),
+                auto_restart=bool(ltv_correct_data.get("auto_restart", True)),
+                redundancy_ratio=float(ltv_correct_data.get("redundancy_ratio", 85.0)),
+            )
             self._config.borrow_rate = float(data.get("borrow_rate", 2.5))
             self._config.update_url = data.get("update_url", "")
         except Exception:
@@ -135,6 +154,7 @@ class ConfigManager:
             "proxy": asdict(self._config.proxy),
             "notify": asdict(self._config.notify),
             "protect": asdict(self._config.protect),
+            "ltv_correct": asdict(self._config.ltv_correct),
             "borrow_rate": self._config.borrow_rate,
             "update_url": self._config.update_url,
         }
@@ -189,3 +209,11 @@ class ConfigManager:
         self._config.protect.trigger_ltv = trigger_ltv
         self._config.protect.per_transfer_amount = per_transfer_amount
         self._config.protect.min_unified_balance = min_unified_balance
+
+    def set_ltv_correct(self, enabled: bool, trigger_count: int, wait_seconds: int, auto_restart: bool, redundancy_ratio: float) -> None:
+        """设置 LTV 自动纠错参数"""
+        self._config.ltv_correct.enabled = enabled
+        self._config.ltv_correct.trigger_count = trigger_count
+        self._config.ltv_correct.wait_seconds = wait_seconds
+        self._config.ltv_correct.auto_restart = auto_restart
+        self._config.ltv_correct.redundancy_ratio = redundancy_ratio
