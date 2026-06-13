@@ -6,8 +6,8 @@ import os
 import tkinter as tk
 from tkinter import messagebox
 
-from auth import checkAuth, isDevMode
-from ui.main_window import MainWindow
+from bybit_staking.auth import checkAuth
+from bybit_staking.ui.main_window import MainWindow
 
 
 def main():
@@ -15,7 +15,6 @@ def main():
     # 启动校验
     ok, reason = checkAuth()
     if not ok:
-        # 显示错误弹窗后退出
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror("启动校验失败", reason)
