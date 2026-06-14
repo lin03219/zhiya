@@ -238,21 +238,21 @@ class BybitClient:
     def get_exchange_coins(self, account_type: str = "UNIFIED") -> dict:
         """获取可兑换币种列表"""
         return self.get("/v5/asset/exchange/query-coin-list", {
-            "accountType": account_type,
+            "accountType": "eb_convert_uta",
         })
 
     def get_exchange_quote(self, from_coin: str, to_coin: str, amount: str) -> dict:
         """获取闪兑换报价"""
-        return self.post_form("/v5/asset/exchange/quote-apply", {
+        return self.post("/v5/asset/exchange/quote-apply", {
             "fromCoin": from_coin,
             "toCoin": to_coin,
             "requestCoin": from_coin,
             "requestAmount": amount,
-            "accountType": "UNIFIED",
+            "accountType": "eb_convert_uta",
         })
 
     def submit_exchange(self, quote_tx_id: str) -> dict:
         """提交闪兑换订单"""
-        return self.post_form("/v5/asset/exchange/convert-execute", {
+        return self.post("/v5/asset/exchange/convert-execute", {
             "quoteTxId": quote_tx_id,
         })

@@ -19,6 +19,7 @@ class ExchangeWindow(tk.Toplevel):
         self._service = service
         self._coins: list[ExchangeableCoin] = []
         self._row_frames: list[tk.Frame] = []
+        self._coin_rows: dict = {}  # coin -> row frame
 
         self.title("闪兑")
         self.geometry("540x420")
@@ -96,6 +97,7 @@ class ExchangeWindow(tk.Toplevel):
         bottom.pack(fill=tk.X, padx=10, pady=5)
         self._status_var = tk.StringVar(value="就绪")
         ttk.Label(bottom, textvariable=self._status_var, anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(bottom, text="一键兑换", command=self._batch_exchange).pack(side=tk.RIGHT, padx=3)
         ttk.Button(bottom, text="刷新", command=self._load_data).pack(side=tk.RIGHT)
 
     def _set_status(self, text: str):
@@ -110,22 +112,44 @@ class ExchangeWindow(tk.Toplevel):
         for f in self._row_frames:
             f.destroy()
         self._row_frames.clear()
+        self._coin_rows.clear()
 
         def _do_load():
             try:
-                # 获取可兑换币种列表
-                self._coins = self._service.getExchangeableBalances()
+                # 获取可兑换币种列表和限额
+                all_coins = self._service.getExchangeableBalances()
+                limits = self._service.getCoinLimits()
+                # 过滤：余额 >= 最小限额 且 未被禁用
+                self._coins = []
+                filtered = 0
+                for ec in all_coins:
+                    lim = limits.get(ec.coin, {})
+                    if lim.get("disableFrom"):
+                        filtered += 1
+                        continue
+                    min_from = float(lim.get("minFrom", "0"))
+                    if float(ec.amount) < min_from:
+                        filtered += 1
+                        continue
+                    self._coins.append(ec)
                 if not self._coins:
-                    self.after(0, lambda: self._show_empty())
+                    self.after(0, lambda f=filtered: self._show_empty_filtered(f))
                     return
                 # 逐币询价
+                quotable_coins = []
+                unquotable = 0
                 for ec in self._coins:
                     updated = self._service.getQuote(ec.coin, ec.amount)
                     ec.quote_amount = updated.quote_amount
                     ec.quote_tx_id = updated.quote_tx_id
                     ec.quotable = updated.quotable
                     ec.error_msg = updated.error_msg
-                self.after(0, self._populate)
+                    if ec.quotable:
+                        quotable_coins.append(ec)
+                    else:
+                        unquotable += 1
+                self._coins = quotable_coins
+                self.after(0, lambda f=filtered + unquotable: self._populate(f))
             except BybitApiError as e:
                 self.after(0, lambda: self._set_status(f"加载失败: {e}"))
                 self.after(0, lambda: self._loading_var.set(""))
@@ -135,14 +159,20 @@ class ExchangeWindow(tk.Toplevel):
 
         threading.Thread(target=_do_load, daemon=True).start()
 
-    def _show_empty(self):
+    def _show_empty(self, filtered=0):
         """显示空状态"""
         self._loading_var.set("")
-        self._set_status("暂无可兑换币种（账户仅有 USDT 或余额为零）")
-        ttk.Label(self._row_container, text="暂无可兑换币种",
+        msg = "暂无可兑换币种"
+        if filtered:
+            msg += f"（已过滤 {filtered} 个低额币种）"
+        self._set_status(msg)
+        ttk.Label(self._row_container, text=msg,
                   foreground="gray").pack(pady=30)
 
-    def _populate(self):
+    def _show_empty_filtered(self, filtered=0):
+        self._show_empty(filtered)
+
+    def _populate(self, filtered=0):
         """填充币种列表"""
         self._loading_var.set("")
         count = 0
@@ -150,6 +180,7 @@ class ExchangeWindow(tk.Toplevel):
             row = ttk.Frame(self._row_container)
             row.pack(fill=tk.X, pady=1)
             self._row_frames.append(row)
+            self._coin_rows[ec.coin] = row
 
             # 币种
             ttk.Label(row, text=ec.coin, width=10, anchor=tk.W).pack(side=tk.LEFT, padx=2)
@@ -187,28 +218,104 @@ class ExchangeWindow(tk.Toplevel):
 
             count += 1
 
-        self._set_status(f"共 {count} 个可兑换币种")
+        msg = f"共 {count} 个可兑换币种"
+        if filtered:
+            msg += f"（已过滤 {filtered} 个低额）"
+        self._set_status(msg)
+    def _batch_exchange(self):
+        """一键批量兑换所有币种"""
+        if not self._coins:
+            messagebox.showinfo("提示", "没有可兑换的币种")
+            return
+        total = len(self._coins)
+        if not messagebox.askyesno("确认", f"将逐个兑换全部 {total} 个币种为 USDT，确定？"):
+            return
+
+        def _run_batch():
+            failed = []
+            for i, coin in enumerate(list(self._coins)):
+                self.after(0, lambda p=i+1, t=total, c=coin.coin:
+                    self._set_status(f"批量兑换 {p}/{t}: {c}..."))
+                try:
+                    # 询价
+                    updated = self._service.getQuote(coin.coin, coin.amount)
+                    if not updated.quotable or not updated.quote_tx_id:
+                        failed.append(f"{coin.coin}: 询价失败 {updated.error_msg}")
+                        continue
+                    # 成交
+                    self._service.executeExchange(updated.quote_tx_id)
+                    # 删行
+                    self.after(0, lambda c=coin: self._on_exchange_success_silent(c))
+                except BybitApiError as e:
+                    failed.append(f"{coin.coin}: {e}")
+                except Exception as e:
+                    failed.append(f"{coin.coin}: {e}")
+            # 完成
+            remaining = len(self._coins)
+            msg = f"批量兑换完成 — 剩余 {remaining} 个"
+            if failed:
+                msg += f"，{len(failed)} 个失败"
+                self.after(0, lambda f=failed: messagebox.showwarning(
+                    "部分失败", "\n".join(f[:5]) + ("\n..." if len(f) > 5 else "")))
+            else:
+                self.after(0, lambda: messagebox.showinfo("完成", "全部兑换成功"))
+            self.after(0, lambda m=msg: self._set_status(m))
+
+        threading.Thread(target=_run_batch, daemon=True).start()
+
+    def _on_exchange_success_silent(self, coin: ExchangeableCoin):
+        """静默删行（用于批量兑换，不弹窗）"""
+        if coin.coin in self._coin_rows:
+            self._coin_rows[coin.coin].destroy()
+            del self._coin_rows[coin.coin]
+            self._row_frames = [f for f in self._row_frames if f.winfo_exists()]
+            self._coins = [c for c in self._coins if c.coin != coin.coin]
+        if len(self._coins) == 0:
+            self._show_empty()
+
+    def _on_exchange_success(self, coin: ExchangeableCoin):
+        """兑换成功后删除该行，不刷新整个列表"""
+        if coin.coin in self._coin_rows:
+            self._coin_rows[coin.coin].destroy()
+            del self._coin_rows[coin.coin]
+            self._row_frames = [f for f in self._row_frames if f.winfo_exists()]
+            self._coins = [c for c in self._coins if c.coin != coin.coin]
+        count = len(self._coins)
+        self._set_status(f"{coin.coin} 兑换成功 — 剩余 {count} 个币种")
+        messagebox.showinfo("兑换成功", f"{coin.coin} -> USDT")
+        # 如果全兑完，显示空状态
+        if count == 0:
+            self._show_empty()
 
     def _do_exchange(self, coin: ExchangeableCoin):
-        """执行闪兑"""
-        if not coin.quotable or not coin.quote_tx_id:
-            return
-        self._set_status(f"正在兑换 {coin.coin}...")
+        """执行闪兑（每次点击都重新询价，避免报价过期）"""
+        self._set_status(f"兑换 {coin.coin}...")
 
         def _run():
-            try:
-                result = self._service.executeExchange(coin.quote_tx_id)
-                txn_id = result.get("result", {}).get("transactionId", "未知")
-                self.after(0, lambda: messagebox.showinfo(
-                    "兑换成功", f"{coin.coin} 已兑换为 USDT\n交易ID: {txn_id}"))
-                self.after(0, lambda: self._set_status(f"{coin.coin} 兑换成功"))
-                # 兑换成功后刷新列表
-                self.after(0, self._load_data)
-            except BybitApiError as e:
-                self.after(0, lambda: messagebox.showerror("兑换失败", str(e), parent=self))
-                self.after(0, lambda: self._set_status(f"{coin.coin} 兑换失败: {e}"))
-            except Exception as e:
-                self.after(0, lambda: messagebox.showerror("异常", str(e), parent=self))
-                self.after(0, lambda: self._set_status(f"异常: {e}"))
+            last_error = ""
+            for _ in range(3):  # 报价过期自动重试最多3次
+                try:
+                    # 重新询价
+                    updated = self._service.getQuote(coin.coin, coin.amount)
+                    if not updated.quotable or not updated.quote_tx_id:
+                        last_error = f"询价失败: {updated.error_msg}"
+                        continue
+                    # 立刻成交
+                    result = self._service.executeExchange(updated.quote_tx_id)
+                    rdata = result.get("result", {})
+                    status = rdata.get("exchangeStatus", rdata.get("status", "处理中"))
+                    self.after(0, lambda c=coin: self._on_exchange_success(c))
+                    return
+                except BybitApiError as e:
+                    last_error = str(e)
+                    if "time out" in last_error or "700008" in last_error:
+                        continue
+                    break
+                except Exception as e:
+                    last_error = f"异常: {e}"
+                    break
+            self.after(0, lambda: messagebox.showerror("兑换失败", last_error, parent=self))
+            self.after(0, lambda: self._set_status(f"{coin.coin} 失败"))
 
         threading.Thread(target=_run, daemon=True).start()
+

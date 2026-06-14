@@ -66,3 +66,18 @@ class ExchangeService:
     def executeExchange(self, quote_tx_id: str) -> dict:
         """执行闪兑"""
         return self._client.submit_exchange(quote_tx_id)
+
+    def getCoinLimits(self) -> dict:
+        """获取所有币种的闪兑限额 {coin: singleFromMinLimit}"""
+        try:
+            resp = self._client.get_exchange_coins()
+            coins = resp.get("result", {}).get("coins", [])
+            return {
+                c["coin"]: {
+                    "minFrom": c.get("singleFromMinLimit", "0"),
+                    "disableFrom": c.get("disableFrom", False),
+                }
+                for c in coins
+            }
+        except Exception:
+            return {}
