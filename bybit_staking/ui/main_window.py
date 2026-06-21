@@ -1302,7 +1302,7 @@ class MainWindow:
         except Exception as e:
             messagebox.showwarning("计算失败", f"LTV检查异常: {e}")
             return
-        msg = "抵押 {} {}\n借入 {} {}\n\n将每2-3秒尝试一次，直到成功".format(
+        msg = "抵押 {} {}\n借入 {} {}\n\n确认发起循环借币？".format(
             col_amt, col_coin, loan_amt, loan_coin)
         if not messagebox.askyesno("循环借币", msg):
             return
