@@ -106,7 +106,7 @@ class ConfigManager:
         if not os.path.exists(self._config_path):
             return self._config
         try:
-            with open(self._config_path, "r", encoding="utf-8") as f:
+            with open(self._config_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             self._config.api_key = self._deobfuscate(data.get("api_key", ""))
             self._config.api_secret = self._deobfuscate(data.get("api_secret", ""))
@@ -217,3 +217,4 @@ class ConfigManager:
         self._config.ltv_correct.wait_seconds = wait_seconds
         self._config.ltv_correct.auto_restart = auto_restart
         self._config.ltv_correct.redundancy_ratio = redundancy_ratio
+
