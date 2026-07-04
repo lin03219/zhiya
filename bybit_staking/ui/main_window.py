@@ -1,4 +1,4 @@
-"""
+﻿"""
 桌面主界面 — 简洁版
 左侧信息栏 + 右侧操作区 + 弹窗（设置、持仓、划转）
 """
@@ -38,13 +38,13 @@ def _center_window(win: tk.Toplevel, parent: tk.Tk):
 
 
 def _fmt_usd(value: float) -> str:
-    """格式化 USD 金额"""
+    """格式化 USD 金额（2 位小数）"""
     if value >= 10000:
-        return f"${value:,.0f}"
+        return f"${value:,.2f}"
     elif value >= 1:
-        return f"${value:,.3f}"
+        return f"${value:,.2f}"
     else:
-        return "$0.0000"
+        return "$0.00"
 
 
 
@@ -734,7 +734,7 @@ class ProtectDialog(tk.Toplevel):
 class MainWindow:
     """主窗口 — 简洁版"""
 
-    LEFT_WIDTH = 200
+    LEFT_WIDTH = 240
 
     def __init__(self):
         self._config_manager = ConfigManager()
@@ -860,9 +860,9 @@ class MainWindow:
         ttk.Label(f, textvariable=self._total_var, foreground="#059669", font=("", 10, "bold")).pack(
             anchor=tk.W, padx=16
         )
-        self._unified_var = tk.StringVar(value="统一: $ --")
+        self._unified_var = tk.StringVar(value="统一账户  --")
         ttk.Label(f, textvariable=self._unified_var, font=("", 8)).pack(anchor=tk.W, padx=20)
-        self._fund_var = tk.StringVar(value="资金: $ --")
+        self._fund_var = tk.StringVar(value="资金账户  --")
         ttk.Label(f, textvariable=self._fund_var, font=("", 8)).pack(anchor=tk.W, padx=20)
 
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, **pad)
@@ -1070,16 +1070,28 @@ class MainWindow:
         self._network_var.set(self._network_label())
 
     def _update_balances(self):
-        """更新统一账户 + 资金账户余额"""
+        """更新统一账户 + 资金账户余额（拆分 USDT / 其他）"""
         if not self._service:
             return
         try:
-            unified = self._service.get_unified_total_usd()
-            fund = self._service.get_fund_total_usd()
-            total = unified + fund
+            # 统一账户总额 + USDT
+            unified_total = self._service.get_unified_total_usd()
+            unified_usdt = 0.0
+            for ub in self._service.get_unified_balance():
+                if ub.coin == "USDT":
+                    unified_usdt = float(ub.usd_value) if ub.usd_value else 0.0
+                    break
+            unified_other = unified_total - unified_usdt
+            # 资金账户 USDT
+            fund_usdt = 0.0
+            for fb in self._service.get_fund_balance():
+                if fb.coin == "USDT":
+                    fund_usdt = float(fb.usd_value) if fb.usd_value else 0.0
+                    break
+            total = unified_total + fund_usdt
             self._root.after(0, lambda: self._total_var.set(_fmt_usd(total)))
-            self._root.after(0, lambda: self._unified_var.set(f"统一: {_fmt_usd(unified)}"))
-            self._root.after(0, lambda: self._fund_var.set(f"资金: {_fmt_usd(fund)}"))
+            self._root.after(0, lambda: self._unified_var.set(f"统一账户  可用 {_fmt_usd(unified_usdt)}  其他 {_fmt_usd(unified_other)}"))
+            self._root.after(0, lambda: self._fund_var.set(f"资金账户  {_fmt_usd(fund_usdt)}"))
             # 刷新持仓 LTV
             ltv = self._service.get_current_ltv()
             self._root.after(0, lambda: self._ltv_var.set(ltv))
