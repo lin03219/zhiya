@@ -37,6 +37,27 @@ def _center_window(win: tk.Toplevel, parent: tk.Tk):
     win.geometry(f"+{x}+{y}")
 
 
+def _confirm_dialog(parent, title: str, message: str) -> bool:
+    """居中于父窗口的确认弹窗（替代 askyesno）"""
+    result = tk.BooleanVar(value=False)
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.resizable(False, False)
+    dlg.transient(parent)
+    dlg.grab_set()
+    f = ttk.Frame(dlg, padding=15)
+    f.pack(fill=tk.BOTH, expand=True)
+    ttk.Label(f, text=message, font=("", 10)).pack(pady=(0, 15))
+    btns = ttk.Frame(f)
+    btns.pack()
+    ttk.Button(btns, text="是", width=8, command=lambda: (result.set(True), dlg.destroy())).pack(side=tk.LEFT, padx=5)
+    ttk.Button(btns, text="否", width=8, command=dlg.destroy).pack(side=tk.LEFT, padx=5)
+    dlg.update_idletasks()
+    _center_window(dlg, parent)
+    dlg.wait_window()
+    return result.get()
+
+
 def _fmt_usd(value: float) -> str:
     """格式化 USD 金额（2 位小数）"""
     if value >= 10000:
@@ -66,6 +87,7 @@ class CoinRow:
     auto_filling: bool = False
     calc_after_id: object = None
     frame: object = None
+    last_quota_warn: float = 0.0  # 平台配额不足飞书上次推送时间
 
 
 class LtvCorrectDialog(tk.Toplevel):
@@ -327,7 +349,7 @@ class PositionsWindow(tk.Toplevel):
         self._row_frames = []
         self._auto_refresh_id = None
         self.title("当前持仓")
-        self.geometry("820x450")
+        self.geometry("700x450")
         self.resizable(True, True)
         self.transient(parent)
         self._build()
@@ -638,7 +660,7 @@ class TransferDialog(tk.Toplevel):
             from_acc, to_acc = "FUND", "UNIFIED"
             label = f"资金 → 统一: {amount} {coin}"
 
-        if not messagebox.askyesno("确认划转", label, parent=self):
+        if not _confirm_dialog(self, "确认划转", label):
             return
         c, a, f, t = coin, amount, from_acc, to_acc
         threading.Thread(target=self._run_transfer, args=(c, a, f, t), daemon=True).start()
@@ -1374,8 +1396,17 @@ class MainWindow:
                 self._root.after(0, lambda r=row: r.calc_label.config(foreground="#10b981"))
                 self._root.after(0, lambda r=row, s=safe_amt, c=loan_coin: self._fill_amount(r, s, c))
             else:
-                # LTV已满，显示状态但不禁止借币——调度器会轮着重试
-                self._root.after(0, lambda r=row: r.calc_var.set("LTV已满 等待轮询 | " + info["current_ltv"]))
+                # 诊断：显示具体原因
+                detail = ""
+                if float(info.get("total_collateral", "0")) <= 0:
+                    detail = "资金账户USDT为0"
+                elif float(info.get("available_usdt", "0")) <= 0 and float(info.get("max_amount_usd", "0")) <= 0:
+                    detail = "可借额度为0(余额×80%≤0)"
+                elif float(info.get("max_amount_usd", "0")) <= 0:
+                    detail = "可借USD为0"
+                else:
+                    detail = "币价获取失败或为0"
+                self._root.after(0, lambda r=row, d=detail: r.calc_var.set(f"LTV已满: {d} | " + info["current_ltv"]))
                 self._root.after(0, lambda r=row: r.calc_label.config(foreground="#d97706"))
         except Exception:
             self._root.after(0, lambda r=row: r.calc_var.set("计算失败"))
@@ -1468,7 +1499,7 @@ class MainWindow:
             messagebox.showwarning("计算失败", f"LTV检查异常: {e}")
             return
         msg = f"借入 {amt} {coin}\n抵押 {col_amt} USDT\n\n确认发起循环借币？"
-        if not messagebox.askyesno("循环借币", msg):
+        if not _confirm_dialog(self._root, "循环借币", msg):
             return
         row.looping = True
         row.fail_count = 0
@@ -1602,6 +1633,17 @@ class MainWindow:
                 self._log_local(n, f"借入\u274c", lc, la, f"借币{ri+1}: {rsn}"))
             self._root.after(0, lambda ri=row.index, rsn=reason:
                 self._set_status(f"\u274c 借币{ri+1} 失败: {rsn}"))
+            # 平台配额不足飞书提醒（5秒一次）
+            if e.code == 148011 or "LOAN_PLATFORM_QUOTA_NOT" in e.message.upper():
+                now_ts = __import__("time").time()
+                if now_ts - row.last_quota_warn >= 5:
+                    row.last_quota_warn = now_ts
+                    if self._notifier:
+                        self._notifier.send(
+                            "平台配额不足",
+                            f"借币{row.index+1}\n币种: {loan_coin}\n数量: {loan_amt}\n原因: {reason}\n借币循环仍在等待配额恢复...",
+                            platform="all"
+                        )
             # 连续失败飞书提醒
             if row.fail_count >= 3 and row.fail_count % 3 == 0:
                 if self._notifier:
@@ -1758,12 +1800,14 @@ class MainWindow:
     def _ban_check_timer(self):
         """每5秒检查 API 封禁状态"""
         self._check_ban_status()
-        self._root.after(5000, self._ban_check_timer)
+        self._root.after(1000, self._ban_check_timer)
 
     def _check_ban_status(self):
         """检查并更新封禁状态"""
         if self._client:
             rl = self._client.rate_limit
+            # 实时更新 API 限额标签
+            self._root.after(0, lambda: self._update_rate_limit(rl))
             if rl.limit == 0:
                 return
             if rl.banned:
