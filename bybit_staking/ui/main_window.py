@@ -882,8 +882,9 @@ class MainWindow:
         ttk.Label(f, textvariable=self._total_var, foreground="#059669", font=("", 10, "bold")).pack(
             anchor=tk.W, padx=16
         )
-        self._unified_var = tk.StringVar(value="统一账户  --")
-        ttk.Label(f, textvariable=self._unified_var, font=("", 8)).pack(anchor=tk.W, padx=20)
+        tk.Label(f, text="统一账户", font=("", 8), fg="#6b7280").pack(anchor=tk.W, padx=20)
+        self._unified_var = tk.StringVar(value="可用 --  其他 --")
+        ttk.Label(f, textvariable=self._unified_var, font=("", 8)).pack(anchor=tk.W, padx=28)
         self._fund_var = tk.StringVar(value="资金账户  --")
         ttk.Label(f, textvariable=self._fund_var, font=("", 8)).pack(anchor=tk.W, padx=20)
 
@@ -1112,7 +1113,7 @@ class MainWindow:
                     break
             total = unified_total + fund_usdt
             self._root.after(0, lambda: self._total_var.set(_fmt_usd(total)))
-            self._root.after(0, lambda: self._unified_var.set(f"统一账户  可用 {_fmt_usd(unified_usdt)}  其他 {_fmt_usd(unified_other)}"))
+            self._root.after(0, lambda: self._unified_var.set(f"可用 {_fmt_usd(unified_usdt)}  其他 {_fmt_usd(unified_other)}"))
             self._root.after(0, lambda: self._fund_var.set(f"资金账户  {_fmt_usd(fund_usdt)}"))
             # 刷新持仓 LTV
             ltv = self._service.get_current_ltv()
@@ -1634,7 +1635,7 @@ class MainWindow:
             self._root.after(0, lambda ri=row.index, rsn=reason:
                 self._set_status(f"\u274c 借币{ri+1} 失败: {rsn}"))
             # 平台配额不足飞书提醒（5秒一次）
-            if e.code == 148011 or "LOAN_PLATFORM_QUOTA_NOT" in e.message.upper():
+            if "配额" in reason:
                 now_ts = __import__("time").time()
                 if now_ts - row.last_quota_warn >= 5:
                     row.last_quota_warn = now_ts
