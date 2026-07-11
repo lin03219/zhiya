@@ -88,8 +88,6 @@ class CoinRow:
     calc_after_id: object = None
     frame: object = None
     last_quota_warn: float = 0.0  # 平台配额不足飞书上次推送时间
-
-
 class LtvCorrectDialog(tk.Toplevel):
     """LTV 自动纠错参数设置弹窗"""
     def __init__(self, parent, config_manager):
@@ -114,14 +112,24 @@ class LtvCorrectDialog(tk.Toplevel):
 
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # 连续失败触发次数
+        # LTV 连续失败次数
         r1 = ttk.Frame(f)
         r1.pack(fill=tk.X, **pad)
-        ttk.Label(r1, text="连续 LTV 超限次数:", width=18).pack(side=tk.LEFT)
+        ttk.Label(r1, text="LTV 连续失败次数:", width=18).pack(side=tk.LEFT)
         self._trigger_count = ttk.Spinbox(r1, from_=1, to=5, width=8)
         self._trigger_count.pack(side=tk.LEFT)
         self._trigger_count.delete(0, tk.END)
         self._trigger_count.insert(0, str(cfg.trigger_count))
+
+        # 配额不足提醒次数（仅飞书，不停止借币）
+        r_quota = ttk.Frame(f)
+        r_quota.pack(fill=tk.X, **pad)
+        ttk.Label(r_quota, text="配额连续失败提醒:", width=18).pack(side=tk.LEFT)
+        self._quota_threshold = ttk.Spinbox(r_quota, from_=1, to=10, width=8)
+        self._quota_threshold.pack(side=tk.LEFT)
+        self._quota_threshold.delete(0, tk.END)
+        self._quota_threshold.insert(0, str(getattr(cfg, "quota_threshold", 5)))
+        ttk.Label(r_quota, text="（仅飞书提醒，不停止）", foreground="#9ca3af", font=("", 8)).pack(side=tk.LEFT, padx=5)
 
         # 等待时间
         r2 = ttk.Frame(f)
@@ -156,6 +164,7 @@ class LtvCorrectDialog(tk.Toplevel):
                 wait_seconds=int(self._wait_seconds.get()),
                 auto_restart=self._auto_restart.get(),
                 redundancy_ratio=float(self._redundancy.get()),
+                quota_threshold=int(self._quota_threshold.get()),
             )
             self._cm.save()
             self.destroy()
@@ -1603,7 +1612,7 @@ class MainWindow:
                         break
                 if not reason:
                     reason = e.message[:60]
-            if e.code == 148012 or "LTV" in e.message.upper() or "THRESHOLD" in e.message.upper() or "COLLATERAL" in e.message.upper():
+            if e.code == 148012 or "LTV" in e.message.upper() or "THRESHOLD" in e.message.upper() or "COLLATERAL" in e.message.upper() or "QUOTA" in e.message.upper() or "FINANCE_BALANCE" in e.message.upper():
                 row.fail_count += 1
                 # LTV超限时自动重算该行最大可借（其他币借走额度后数量需更新）
                 try:
@@ -1619,40 +1628,41 @@ class MainWindow:
                 row.fail_count = 0
             # LTV 自动纠错检查（该行独立）
             ltv_cfg = self._config_manager.get_config().ltv_correct
-            if ltv_cfg.enabled and row.fail_count >= ltv_cfg.trigger_count:
-                row.looping = False
-                self._root.after(0, lambda r=row: r.borrow_btn.config(text=f"借币{r.index + 1}"))
-                self._root.after(0, lambda c=row.fail_count, w=ltv_cfg.wait_seconds, ri=row.index:
-                    self._set_status(f"\u26a0 借币{ri+1} LTV超限{c}次，{w}秒后自动重算..."))
-                self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, ri=row.index:
-                    self._log_local(n, "超限停止", lc, la, f"借币{ri+1}触发纠错"))
-                _time.sleep(ltv_cfg.wait_seconds)
-                self._root.after(0, lambda r=row: self._do_auto_recalc(r, ltv_cfg.redundancy_ratio, ltv_cfg.auto_restart))
-                return
+            if row.fail_count >= ltv_cfg.trigger_count:
+                is_quota = "QUOTA" in e.message.upper() or "FINANCE_BALANCE" in e.message.upper()
+                if is_quota:
+                    # 配额不足：用独立阈值判断是否飞书提醒，不停止借币
+                    qt = getattr(ltv_cfg, "quota_threshold", 5)
+                    prev_count = row.fail_count
+                    row.fail_count = 0
+                    if self._notifier and prev_count >= qt:
+                        self._notifier.send(
+                            "配额不足警告",
+                            f"借币{row.index+1}\n币种: {loan_coin}\n数量: {loan_amt}\n原因: {reason}\n已连续{prev_count}次配额不足，继续重试中",
+                            platform="all"
+                        )
+                else:
+                    # LTV超限：停止 + 等待 + 重算 + 自动恢复
+                    row.looping = False
+                    self._root.after(0, lambda r=row: r.borrow_btn.config(text=f"借币{r.index + 1}"))
+                    self._root.after(0, lambda c=row.fail_count, w=ltv_cfg.wait_seconds, ri=row.index:
+                        self._set_status(f"\u26a0 借币{ri+1} LTV超限{c}次，{w}秒后自动重算..."))
+                    self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, ri=row.index:
+                        self._log_local(n, "超限停止", lc, la, f"借币{ri+1}触发纠错"))
+                    if self._notifier:
+                        self._notifier.send(
+                            "LTV超限警告",
+                            f"借币{row.index+1}\n币种: {loan_coin}\n数量: {loan_amt}\n原因: {reason}\n连续失败: {row.fail_count}次\n将在{ltv_cfg.wait_seconds}秒后自动重算",
+                            platform="all"
+                        )
+                    _time.sleep(ltv_cfg.wait_seconds)
+                    self._root.after(0, lambda r=row: self._do_auto_recalc(r, ltv_cfg.redundancy_ratio, ltv_cfg.auto_restart))
+                    return
             # 失败日志
             self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, rsn=reason, ri=row.index:
                 self._log_local(n, f"借入\u274c", lc, la, f"借币{ri+1}: {rsn}"))
             self._root.after(0, lambda ri=row.index, rsn=reason:
                 self._set_status(f"\u274c 借币{ri+1} 失败: {rsn}"))
-            # 平台配额不足飞书提醒（5秒一次）
-            if "配额" in reason:
-                now_ts = __import__("time").time()
-                if now_ts - row.last_quota_warn >= 5:
-                    row.last_quota_warn = now_ts
-                    if self._notifier:
-                        self._notifier.send(
-                            "平台配额不足",
-                            f"借币{row.index+1}\n币种: {loan_coin}\n数量: {loan_amt}\n原因: {reason}\n借币循环仍在等待配额恢复...",
-                            platform="all"
-                        )
-            # 连续失败飞书提醒
-            if row.fail_count >= 3 and row.fail_count % 3 == 0:
-                if self._notifier:
-                    self._notifier.send(
-                        "LTV超限警告",
-                        f"借币{row.index+1}\n币种: {loan_coin}\n数量: {loan_amt}\n原因: {reason}\n连续失败: {row.fail_count}次",
-                        platform="all"
-                    )
         except Exception as e:
             err_msg = str(e)[:80]
             self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt, ri=row.index, em=err_msg:
