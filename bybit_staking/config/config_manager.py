@@ -48,7 +48,6 @@ class LtvCorrectConfig:
     wait_seconds: int = 5
     auto_restart: bool = True
     redundancy_ratio: float = 85.0
-    quota_threshold: int = 5  # 配额不足飞书提醒阈值
 
 
 @dataclass
@@ -211,12 +210,11 @@ class ConfigManager:
         self._config.protect.per_transfer_amount = per_transfer_amount
         self._config.protect.min_unified_balance = min_unified_balance
 
-    def set_ltv_correct(self, enabled: bool, trigger_count: int, wait_seconds: int, auto_restart: bool, redundancy_ratio: float, quota_threshold: int = 5) -> None:
+    def set_ltv_correct(self, enabled: bool, trigger_count: int, wait_seconds: int, auto_restart: bool, redundancy_ratio: float) -> None:
         """设置 LTV 自动纠错参数"""
         self._config.ltv_correct.enabled = enabled
         self._config.ltv_correct.trigger_count = trigger_count
         self._config.ltv_correct.wait_seconds = wait_seconds
         self._config.ltv_correct.auto_restart = auto_restart
         self._config.ltv_correct.redundancy_ratio = redundancy_ratio
-        self._config.ltv_correct.quota_threshold = quota_threshold
 
