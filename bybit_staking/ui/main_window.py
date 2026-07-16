@@ -912,6 +912,261 @@ class ProtectDialog(tk.Toplevel):
             messagebox.showerror("保存失败", str(e), parent=self)
 
 
+class AdjustCollateralDialog(tk.Toplevel):
+    """调整抵押品弹窗"""
+    def __init__(self, parent, service, config_manager, pos_data, fund_usdt, on_success=None, main_window=None, ltv_var=None):
+        super().__init__(parent)
+        self._service = service
+        self._config = config_manager.get_config()
+        self._on_success = on_success
+        self._main_window = main_window
+        self._shared_ltv_var = ltv_var
+        # 首页LTV变化时同步更新抵押品/负债数据并重算预估
+        if self._shared_ltv_var:
+            self._shared_ltv_var.trace_add("write", self._on_ltv_changed)
+        self.title("调整抵押品")
+        self.resizable(False, False)
+        self.transient(parent)
+        self._tab = "add"
+        self._build()
+        self._set_data(pos_data, fund_usdt)
+        _center_window(self, parent)
+        # 定时刷新LTV（复用首页缓存，不额外消耗API）
+
+
+    def _build(self):
+        pad = {"padx": 10, "pady": 5}
+
+        f = ttk.Frame(self, padding=10)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        # Tab 按钮
+        tab_row = ttk.Frame(f)
+        tab_row.pack(fill=tk.X, pady=(0, 10))
+        self._add_tab_btn = tk.Button(tab_row, text="追加抵押资产", font=("", 10),
+                                       bg="#3b82f6", fg="white", relief="flat",
+                                       command=lambda: self._switch_tab("add"))
+        self._add_tab_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        self._reduce_tab_btn = tk.Button(tab_row, text="减少抵押资产", font=("", 10),
+                                          bg="#e5e7eb", fg="#374151", relief="flat",
+                                          command=lambda: self._switch_tab("reduce"))
+        self._reduce_tab_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+
+        # 数据区
+        data_frame = ttk.LabelFrame(f, text="持仓概览", padding=8)
+        data_frame.pack(fill=tk.X, pady=(0, 8))
+
+        _r1 = ttk.Frame(data_frame)
+        _r1.pack(fill=tk.X)
+        _lbl1 = ttk.Label(_r1, text="当前 LTV:", width=14, anchor=tk.W)
+        _lbl1.pack(side=tk.LEFT)
+        ToolTip(_lbl1, "当前持仓贷款价值比")
+        _ltv_tv = self._shared_ltv_var if self._shared_ltv_var else tk.StringVar(value="--")
+        self._ltv_val = ttk.Label(_r1, textvariable=_ltv_tv, font=("", 10, "bold"), foreground="#d97706")
+        self._ltv_val.pack(side=tk.LEFT)
+
+        _r2 = ttk.Frame(data_frame)
+        _r2.pack(fill=tk.X, pady=(2, 0))
+        _lbl2 = ttk.Label(_r2, text="总抵押品价值:", width=14, anchor=tk.W)
+        _lbl2.pack(side=tk.LEFT)
+        ToolTip(_lbl2, "当前抵押品总价值(USDT)")
+        self._collateral_val = ttk.Label(_r2, text="--")
+        self._collateral_val.pack(side=tk.LEFT)
+
+        _r3 = ttk.Frame(data_frame)
+        _r3.pack(fill=tk.X, pady=(2, 0))
+        _lbl3 = ttk.Label(_r3, text="总负债:", width=14, anchor=tk.W)
+        _lbl3.pack(side=tk.LEFT)
+        ToolTip(_lbl3, "当前借入总额(USDT)")
+        self._debt_val = ttk.Label(_r3, text="--")
+        self._debt_val.pack(side=tk.LEFT)
+
+        # 可用余额
+        self._balance_frame = ttk.LabelFrame(f, text="资金账户", padding=8)
+        self._balance_frame.pack(fill=tk.X, pady=(0, 8))
+        _bl = ttk.Frame(self._balance_frame)
+        _bl.pack(fill=tk.X)
+        _lbl4 = ttk.Label(_bl, text="可用余额:", width=14, anchor=tk.W)
+        _lbl4.pack(side=tk.LEFT)
+        ToolTip(_lbl4, "资金账户中可用USDT余额")
+        self._balance_val = ttk.Label(_bl, text="--")
+        self._balance_val.pack(side=tk.LEFT)
+
+        # 金额输入
+        amount_frame = ttk.LabelFrame(f, text="划转金额", padding=8)
+        amount_frame.pack(fill=tk.X, pady=(0, 8))
+        _ar = ttk.Frame(amount_frame)
+        _ar.pack(fill=tk.X)
+        _lbl5 = ttk.Label(_ar, text="金额 (USDT):", width=14, anchor=tk.W)
+        _lbl5.pack(side=tk.LEFT)
+        ToolTip(_lbl5, "输入要追加或减少的USDT金额")
+        self._amount_var = tk.StringVar()
+        self._amount_entry = ttk.Entry(_ar, textvariable=self._amount_var, width=18)
+        self._amount_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self._amount_var.trace_add("write", self._on_amount_change)
+
+        # 快捷比例
+        pct_row = ttk.Frame(amount_frame)
+        pct_row.pack(fill=tk.X, pady=(5, 0))
+        self._pct_btns = []
+        for pct in [25, 50, 75, 100]:
+            btn = ttk.Button(pct_row, text="{0}%".format(pct), width=6,
+                           command=lambda p=pct: self._set_pct(p))
+            btn.pack(side=tk.LEFT, padx=2)
+            self._pct_btns.append(btn)
+
+        # 预估
+        est_frame = ttk.LabelFrame(f, text="调整后预计", padding=8)
+        est_frame.pack(fill=tk.X, pady=(0, 10))
+        _er1 = ttk.Frame(est_frame)
+        _er1.pack(fill=tk.X)
+        _lbl6 = ttk.Label(_er1, text="抵押品将变动:", width=14, anchor=tk.W)
+        _lbl6.pack(side=tk.LEFT)
+        ToolTip(_lbl6, "预估抵押品变化量")
+        self._collateral_change = ttk.Label(_er1, text="--", foreground="#6b7280")
+        self._collateral_change.pack(side=tk.LEFT)
+
+        _er2 = ttk.Frame(est_frame)
+        _er2.pack(fill=tk.X, pady=(2, 0))
+        _lbl7 = ttk.Label(_er2, text="预估 LTV:", width=14, anchor=tk.W)
+        _lbl7.pack(side=tk.LEFT)
+        ToolTip(_lbl7, "调整后的预估贷款价值比")
+        self._est_ltv = ttk.Label(_er2, text="--", font=("", 10, "bold"), foreground="#10b981")
+        self._est_ltv.pack(side=tk.LEFT)
+
+        # 按钮
+        btn_row = ttk.Frame(f)
+        btn_row.pack(fill=tk.X)
+        self._confirm_btn = ttk.Button(btn_row, text="确认追加", command=self._on_confirm)
+        self._confirm_btn.pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_row, text="取消", command=self.destroy).pack(side=tk.RIGHT)
+
+    def _switch_tab(self, tab):
+        self._tab = tab
+        self._amount_var.set("")
+        self._collateral_change.config(text="--")
+        self._est_ltv.config(text="--")
+        if tab == "add":
+            self._add_tab_btn.config(bg="#3b82f6", fg="white")
+            self._reduce_tab_btn.config(bg="#e5e7eb", fg="#374151")
+            self._confirm_btn.config(text="确认追加")
+            self._balance_frame.config(text="资金账户")
+            self._balance_val.config(text="{:,.2f} USDT".format(self._fund_usdt))
+        else:
+            self._add_tab_btn.config(bg="#e5e7eb", fg="#374151")
+            self._reduce_tab_btn.config(bg="#3b82f6", fg="white")
+            self._confirm_btn.config(text="确认减少")
+            self._balance_frame.config(text="可释放抵押品")
+            self._balance_val.config(text="{:,.2f} USDT".format(self._releasable))
+
+
+    def _on_ltv_changed(self, *args):
+        """首页LTV刷新时同步更新抵押品/负债数据并重算预估"""
+        try:
+            if self._main_window and hasattr(self._main_window, "_last_pos_data"):
+                pos = self._main_window._last_pos_data
+                if pos:
+                    self._total_collateral = float(pos.get("totalCollateral", "0"))
+                    self._total_debt = float(pos.get("totalDebt", "0"))
+                    self._collateral_val.config(text="{:,.2f} USDT".format(self._total_collateral))
+                    self._debt_val.config(text="{:,.2f} USDT".format(self._total_debt))
+                    target_ratio = self._config.borrow_target_ltv / 100.0
+                    min_collateral = self._total_debt / target_ratio if target_ratio > 0 else self._total_debt
+                    self._releasable = max(0, self._total_collateral - min_collateral)
+                    if self._tab == "reduce":
+                        self._balance_val.config(text="{:,.2f} USDT".format(self._releasable))
+                    self._on_amount_change()
+        except Exception:
+            pass
+
+    def _set_data(self, pos_data, fund_usdt_in):
+        """从首页缓存数据渲染，不额外调API"""
+        try:
+            ltv_raw = pos_data.get("ltv", "0")
+            ltv_val = float(ltv_raw) * 100 if ltv_raw else 0
+            self._current_ltv = ltv_val
+            total_collateral = float(pos_data.get("totalCollateral", "0"))
+            total_debt = float(pos_data.get("totalDebt", "0"))
+            self._total_collateral = total_collateral
+            self._total_debt = total_debt
+            self._collateral_val.config(text="{:,.2f} USDT".format(total_collateral))
+            self._debt_val.config(text="{:,.2f} USDT".format(total_debt))
+            import math
+            self._fund_usdt = math.floor(fund_usdt_in * 100) / 100.0
+            # 可释放 = 抵押品价值 - 负债/目标LTV
+            target_ratio = self._config.borrow_target_ltv / 100.0
+            min_collateral = total_debt / target_ratio if target_ratio > 0 else total_debt
+            self._releasable = max(0, total_collateral - min_collateral)
+            self._balance_val.config(text="{:,.2f} USDT".format(self._fund_usdt))
+        except Exception as e:
+            self._ltv_val.config(text="加载失败")
+
+    def _set_pct(self, pct):
+        if self._tab == "add":
+            amount = self._fund_usdt * pct / 100.0
+        else:
+            amount = self._releasable * pct / 100.0
+        self._amount_var.set("{:.2f}".format(amount))
+
+    def _on_amount_change(self, *args):
+        try:
+            amt = float(self._amount_var.get())
+        except ValueError:
+            self._collateral_change.config(text="--")
+            self._est_ltv.config(text="--")
+            return
+        if amt <= 0:
+            self._collateral_change.config(text="--")
+            self._est_ltv.config(text="--")
+            return
+        if self._tab == "add":
+            new_collateral = self._total_collateral + amt
+            change_text = "+{:,.2f} USDT".format(amt)
+            change_color = "#10b981"
+        else:
+            new_collateral = self._total_collateral - amt
+            change_text = "-{:,.2f} USDT".format(amt)
+            change_color = "#ef4444"
+        if new_collateral <= 0:
+            self._collateral_change.config(text="抵押品不足", foreground="#ef4444")
+            self._est_ltv.config(text="--")
+            return
+        new_ltv = (self._total_debt / new_collateral) * 100
+        self._collateral_change.config(text=change_text, foreground=change_color)
+        self._est_ltv.config(text="{:.2f}%".format(new_ltv))
+        if new_ltv >= 85:
+            self._est_ltv.config(foreground="#ef4444")
+        elif new_ltv >= 75:
+            self._est_ltv.config(foreground="#d97706")
+        else:
+            self._est_ltv.config(foreground="#10b981")
+
+    def _on_confirm(self):
+        amt_str = self._amount_var.get().strip()
+        if not amt_str:
+            messagebox.showwarning("提示", "请输入金额", parent=self)
+            return
+        try:
+            amt = float(amt_str)
+            if amt <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("提示", "请输入有效金额", parent=self)
+            return
+        direction = "0" if self._tab == "add" else "1"
+        action = "追加" if self._tab == "add" else "减少"
+        msg = "确认{0}抵押品 {1:.2f} USDT？".format(action, amt)
+        if not _confirm_dialog(self, "确认操作", msg):
+            return
+        try:
+            adjust_id = self._service.adjust_collateral("USDT", str(amt), direction)
+            if self._on_success:
+                self._on_success()
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("失败", "{0}抵押品失败: {1}".format(action, str(e)[:100]), parent=self)
+
+
 class MainWindow:
     """主窗口 — 简洁版"""
 
@@ -1052,9 +1307,11 @@ class MainWindow:
         # 持仓 LTV
         tk.Label(f, text="⬤ 持仓 LTV", font=("", 9, "bold"), fg="#f59e0b").pack(anchor=tk.W, **pad)
         self._ltv_var = tk.StringVar(value="--")
-        ttk.Label(f, textvariable=self._ltv_var, foreground="#d97706", font=("", 10, "bold")).pack(
-            anchor=tk.W, padx=16
-        )
+        self._last_pos_data = {}
+        _ltv_row = ttk.Frame(f)
+        _ltv_row.pack(anchor=tk.W, padx=16, fill=tk.X)
+        ttk.Label(_ltv_row, textvariable=self._ltv_var, foreground="#d97706", font=("", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Button(_ltv_row, text="调整", width=4, command=self._open_adjust_collateral).pack(side=tk.LEFT, padx=(8, 0))
 
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, **pad)
 
@@ -1276,6 +1533,15 @@ class MainWindow:
             # 刷新持仓 LTV
             ltv = self._service.get_current_ltv()
             self._root.after(0, lambda: self._ltv_var.set(ltv))
+            try:
+                self._last_pos_data = self._service.get_position()
+            except Exception:
+                pass
+            # 缓存持仓数据供调整窗口等复用
+            try:
+                self._last_pos_data = self._service.get_position()
+            except Exception:
+                pass
         except BybitApiError as e:
             self._root.after(0, lambda e=e: self._set_status(f'余额查询失败: {e}'))
         except Exception as e:
@@ -1309,6 +1575,23 @@ class MainWindow:
 
     def _open_settings(self):
         SettingsDialog(self._root, self._config_manager, self._reinit_client)
+
+    def _open_adjust_collateral(self):
+        """打开调整抵押品弹窗（复用首页position缓存）"""
+        if not self._service:
+            messagebox.showwarning("提示", "请先配置 API 密钥")
+            return
+        try:
+            pos = self._service.get_position()
+            balances = self._service.get_fund_balance()
+            fund_usdt = 0.0
+            for b in balances:
+                if b.coin == "USDT":
+                    fund_usdt = float(b.wallet_balance)
+                    break
+            AdjustCollateralDialog(self._root, self._service, self._config_manager, pos, fund_usdt, self._refresh_all, self, self._ltv_var)
+        except Exception as e:
+            messagebox.showerror("错误", "获取数据失败: {0}".format(str(e)[:80]))
 
     def _open_protect(self):
         self._open_borrow_settings()
@@ -1989,6 +2272,11 @@ class MainWindow:
         try:
             ltv = self._service.get_current_ltv()
             self._root.after(0, lambda: self._ltv_var.set(ltv))
+            # 缓存持仓数据供调整窗口等复用
+            try:
+                self._last_pos_data = self._service.get_position()
+            except Exception:
+                pass
             # 自动保护检查
             self._run_async(lambda l=ltv: self._check_protect(l))
         except Exception:
