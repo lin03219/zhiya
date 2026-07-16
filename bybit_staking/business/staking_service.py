@@ -149,7 +149,7 @@ class StakingService:
         except Exception:
             return ("0", "--")
 
-    def calculate_max_borrow(self, loan_coin: str) -> dict:
+    def calculate_max_borrow(self, loan_coin: str, target_ltv_ratio: float = 0.80) -> dict:
         """根据 LTV ≤ 80% 计算最大可借"""
         result = {
             "can_borrow": False, "max_amount": "0", "max_amount_usd": "0",
@@ -178,7 +178,7 @@ class StakingService:
             if total_collateral_after <= 0:
                 return result
 
-            max_debt = total_collateral_after * 0.80
+            max_debt = total_collateral_after * target_ltv_ratio
             max_borrow_usd = max_debt  # 纯按资金账户USDT算新额度，不管已有负债
             if max_borrow_usd <= 0:
                 return result
@@ -203,7 +203,7 @@ class StakingService:
             max_amount = max_borrow_usd / price
             result["max_amount"] = f"{max_amount:.4f}"
 
-            projected_ltv = 0.80  # 新借款按80%LTV计算
+            projected_ltv = target_ltv_ratio
             result["projected_ltv"] = f"{projected_ltv * 100:.2f}%"
             result["can_borrow"] = True
         except Exception:

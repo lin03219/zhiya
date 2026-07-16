@@ -61,6 +61,7 @@ class AppConfig:
     protect: ProtectConfig = field(default_factory=ProtectConfig)
     ltv_correct: LtvCorrectConfig = field(default_factory=LtvCorrectConfig)
     borrow_rate: float = 2.5           # 借币请求间隔（秒）
+    borrow_target_ltv: float = 70.0     # 借币目标 LTV（%）
     update_url: str = ""               # 版本检查 URL（JSON 含 version 字段）
 
     BYBIT_MAINNET = "https://api.bybit.com"
@@ -140,6 +141,7 @@ class ConfigManager:
                 redundancy_ratio=float(ltv_correct_data.get("redundancy_ratio", 85.0)),
             )
             self._config.borrow_rate = float(data.get("borrow_rate", 2.5))
+            self._config.borrow_target_ltv = float(data.get("borrow_target_ltv", 70.0))
             self._config.update_url = data.get("update_url", "")
         except Exception:
             pass
@@ -156,6 +158,7 @@ class ConfigManager:
             "protect": asdict(self._config.protect),
             "ltv_correct": asdict(self._config.ltv_correct),
             "borrow_rate": self._config.borrow_rate,
+            "borrow_target_ltv": self._config.borrow_target_ltv,
             "update_url": self._config.update_url,
         }
         with open(self._config_path, "w", encoding="utf-8") as f:
@@ -198,6 +201,10 @@ class ConfigManager:
     def set_borrow_rate(self, rate: float) -> None:
         """设置借币请求速率（秒）"""
         self._config.borrow_rate = rate
+
+    def set_borrow_target_ltv(self, ltv: float) -> None:
+        """设置借币目标 LTV（%）"""
+        self._config.borrow_target_ltv = ltv
 
     def set_update_url(self, url: str) -> None:
         """设置版本检查 URL"""

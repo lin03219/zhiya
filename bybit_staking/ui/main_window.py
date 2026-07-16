@@ -1,4 +1,4 @@
-﻿"""
+"""
 桌面主界面 — 简洁版
 左侧信息栏 + 右侧操作区 + 弹窗（设置、持仓、划转）
 """
@@ -91,13 +91,15 @@ class CoinRow:
     quota_fail_count: int = 0  # 配额连续失败计数
 
 
-class LtvCorrectDialog(tk.Toplevel):
-    """LTV 自动纠错参数设置弹窗"""
-    def __init__(self, parent, config_manager):
+
+class BorrowSettingsDialog(tk.Toplevel):
+    """借币设置弹窗（合并保护、LTV纠错、LTV飞书提醒、借币参数）"""
+    def __init__(self, parent, config_manager, on_save_callback=None):
         super().__init__(parent)
         self._config = config_manager.get_config()
         self._cm = config_manager
-        self.title("LTV 自动纠错")
+        self._on_save_cb = on_save_callback
+        self.title("借币设置")
         self.resizable(False, False)
         self.transient(parent)
         self._build()
@@ -105,64 +107,186 @@ class LtvCorrectDialog(tk.Toplevel):
 
     def _build(self):
         pad = {"padx": 10, "pady": 5}
-        cfg = self._config.ltv_correct
-        f = ttk.Frame(self, padding=10)
+        hint_font = ("", 7)
+        hint_color = "#9ca3af"
+
+        f = ttk.Frame(self, padding=8)
         f.pack(fill=tk.BOTH, expand=True)
 
-        # 总开关
-        self._enabled = tk.BooleanVar(value=cfg.enabled)
-        ttk.Checkbutton(f, text="启用 LTV 自动纠错", variable=self._enabled).pack(anchor=tk.W, **pad)
+        # 两列容器
+        cols = ttk.Frame(f)
+        cols.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+        left = ttk.Frame(cols)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        right = ttk.Frame(cols)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # 连续失败触发次数
-        r1 = ttk.Frame(f)
-        r1.pack(fill=tk.X, **pad)
-        ttk.Label(r1, text="连续 LTV 超限次数:", width=18).pack(side=tk.LEFT)
-        self._trigger_count = ttk.Spinbox(r1, from_=1, to=5, width=8)
+        # ===== 左列：借币参数 =====
+        param_frame = ttk.LabelFrame(left, text="借币参数", padding=6)
+        param_frame.pack(fill=tk.X, pady=(0, 6))
+
+        # 借币目标 LTV
+        ttk.Label(param_frame, text="借币目标 LTV:").pack(anchor=tk.W)
+        ltv_row = ttk.Frame(param_frame)
+        ltv_row.pack(fill=tk.X, pady=(2, 0))
+        self._target_ltv = ttk.Spinbox(ltv_row, from_=5, to=80, width=6)
+        self._target_ltv.pack(side=tk.LEFT)
+        self._target_ltv.delete(0, tk.END)
+        self._target_ltv.insert(0, str(int(self._config.borrow_target_ltv)))
+        ttk.Label(ltv_row, text="%  (5~80)", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(param_frame, text="借到后账户LTV目标值(5~80)", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 6))
+
+        # 借币请求速率
+        ttk.Label(param_frame, text="借币请求速率:").pack(anchor=tk.W)
+        rate_row = ttk.Frame(param_frame)
+        rate_row.pack(fill=tk.X, pady=(2, 0))
+        self._rate_var = tk.StringVar(value=str(self._config.borrow_rate))
+        rate_vals = [f"{x/10:.1f}" for x in range(10, 41, 1)]
+        self._rate_combo = ttk.Combobox(rate_row, textvariable=self._rate_var,
+            values=rate_vals, width=6, state="readonly")
+        self._rate_combo.pack(side=tk.LEFT)
+        ttk.Label(rate_row, text="秒", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(param_frame, text="间隔+随机0.01~0.5秒防限流", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 0))
+
+        # ===== 左列：LTV 自动保护 =====
+        protect_cfg = self._config.protect
+        protect_frame = ttk.LabelFrame(left, text="LTV 自动保护", padding=6)
+        protect_frame.pack(fill=tk.X, pady=(0, 6))
+
+        self._protect_enabled = tk.BooleanVar(value=protect_cfg.enabled)
+        ttk.Checkbutton(protect_frame, text="保护开关", variable=self._protect_enabled).pack(anchor=tk.W)
+        ttk.Label(protect_frame, text="开启后LTV超阈值自动划转", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(0, 6))
+
+        ttk.Label(protect_frame, text="触发阈值:").pack(anchor=tk.W)
+        trig_row = ttk.Frame(protect_frame)
+        trig_row.pack(fill=tk.X, pady=(2, 0))
+        self._trigger_ltv = ttk.Entry(trig_row, width=8)
+        self._trigger_ltv.pack(side=tk.LEFT)
+        self._trigger_ltv.insert(0, str(protect_cfg.trigger_ltv))
+        ttk.Label(trig_row, text="%", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(protect_frame, text="LTV超过此值触发保护", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 6))
+
+        ttk.Label(protect_frame, text="单次划转:").pack(anchor=tk.W)
+        per_row = ttk.Frame(protect_frame)
+        per_row.pack(fill=tk.X, pady=(2, 0))
+        self._per_amount = ttk.Entry(per_row, width=8)
+        self._per_amount.pack(side=tk.LEFT)
+        self._per_amount.insert(0, protect_cfg.per_transfer_amount)
+        ttk.Label(per_row, text="USDT", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(protect_frame, text="每次自动划转USDT数量", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 6))
+
+        ttk.Label(protect_frame, text="最低余额:").pack(anchor=tk.W)
+        min_row = ttk.Frame(protect_frame)
+        min_row.pack(fill=tk.X, pady=(2, 0))
+        self._min_balance = ttk.Entry(min_row, width=8)
+        self._min_balance.pack(side=tk.LEFT)
+        self._min_balance.insert(0, protect_cfg.min_unified_balance)
+        ttk.Label(min_row, text="USDT", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(protect_frame, text="统一账户低于此值不划转", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 0))
+
+        # ===== 右列：LTV 飞书提醒 =====
+        alert_cfg = self._config.notify
+        alert_frame = ttk.LabelFrame(right, text="LTV 飞书提醒", padding=6)
+        alert_frame.pack(fill=tk.X, pady=(0, 6))
+
+        ttk.Label(alert_frame, text="LTV 提醒阈值:").pack(anchor=tk.W)
+        thr_row = ttk.Frame(alert_frame)
+        thr_row.pack(fill=tk.X, pady=(2, 0))
+        self._ltv_threshold = ttk.Entry(thr_row, width=8)
+        self._ltv_threshold.pack(side=tk.LEFT)
+        self._ltv_threshold.insert(0, str(alert_cfg.ltv_threshold))
+        ttk.Label(thr_row, text="%", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(alert_frame, text="LTV超过此值飞书推送告警", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 6))
+
+        ttk.Label(alert_frame, text="推送间隔:").pack(anchor=tk.W)
+        int_row = ttk.Frame(alert_frame)
+        int_row.pack(fill=tk.X, pady=(2, 0))
+        self._ltv_interval = ttk.Entry(int_row, width=8)
+        self._ltv_interval.pack(side=tk.LEFT)
+        self._ltv_interval.insert(0, str(alert_cfg.ltv_alert_interval))
+        ttk.Label(int_row, text="秒", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(alert_frame, text="两次告警最小间隔", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 0))
+
+        # ===== 右列：LTV 自动纠错 =====
+        correct_cfg = self._config.ltv_correct
+        correct_frame = ttk.LabelFrame(right, text="LTV 自动纠错", padding=6)
+        correct_frame.pack(fill=tk.X, pady=(0, 6))
+
+        self._correct_enabled = tk.BooleanVar(value=correct_cfg.enabled)
+        ttk.Checkbutton(correct_frame, text="纠错开关", variable=self._correct_enabled).pack(anchor=tk.W)
+        ttk.Label(correct_frame, text="借币连续失败自动重算", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(0, 6))
+
+        ttk.Label(correct_frame, text="连续失败次数:").pack(anchor=tk.W)
+        cnt_row = ttk.Frame(correct_frame)
+        cnt_row.pack(fill=tk.X, pady=(2, 0))
+        self._trigger_count = ttk.Spinbox(cnt_row, from_=1, to=10, width=6)
         self._trigger_count.pack(side=tk.LEFT)
         self._trigger_count.delete(0, tk.END)
-        self._trigger_count.insert(0, str(cfg.trigger_count))
+        self._trigger_count.insert(0, str(correct_cfg.trigger_count))
+        ttk.Label(cnt_row, text="次", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(correct_frame, text="连续失败N次触发纠错", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 6))
 
-        # 等待时间
-        r2 = ttk.Frame(f)
-        r2.pack(fill=tk.X, **pad)
-        ttk.Label(r2, text="停止等待(秒):", width=18).pack(side=tk.LEFT)
-        self._wait_seconds = ttk.Spinbox(r2, from_=1, to=60, width=8)
+        ttk.Label(correct_frame, text="等待时间:").pack(anchor=tk.W)
+        wait_row = ttk.Frame(correct_frame)
+        wait_row.pack(fill=tk.X, pady=(2, 0))
+        self._wait_seconds = ttk.Spinbox(wait_row, from_=1, to=120, width=6)
         self._wait_seconds.pack(side=tk.LEFT)
         self._wait_seconds.delete(0, tk.END)
-        self._wait_seconds.insert(0, str(cfg.wait_seconds))
+        self._wait_seconds.insert(0, str(correct_cfg.wait_seconds))
+        ttk.Label(wait_row, text="秒", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
+        ttk.Label(correct_frame, text="触发后等待再重算", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(1, 6))
 
-        # 冗余比例
-        r3 = ttk.Frame(f)
-        r3.pack(fill=tk.X, **pad)
-        ttk.Label(r3, text="纠错后冗余比例(%):", width=18).pack(side=tk.LEFT)
-        self._redundancy = ttk.Spinbox(r3, from_=50, to=100, width=8)
-        self._redundancy.pack(side=tk.LEFT)
-        self._redundancy.delete(0, tk.END)
-        self._redundancy.insert(0, str(cfg.redundancy_ratio))
+        self._auto_restart = tk.BooleanVar(value=correct_cfg.auto_restart)
+        ttk.Checkbutton(correct_frame, text="自动重新发起", variable=self._auto_restart).pack(anchor=tk.W)
+        ttk.Label(correct_frame, text="按LTV%重算后自动发起借币", foreground=hint_color, font=hint_font).pack(anchor=tk.W, pady=(0, 0))
 
-        # 自动发起
-        self._auto_restart = tk.BooleanVar(value=cfg.auto_restart)
-        ttk.Checkbutton(f, text="重新计算后自动发起借币", variable=self._auto_restart).pack(anchor=tk.W, **pad)
-
-        # 保存按钮
-        ttk.Button(f, text="保存", command=self._on_save).pack(pady=(10, 0))
+        # 保存/取消
+        btn_row = ttk.Frame(f)
+        btn_row.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(btn_row, text="保存", command=self._on_save).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_row, text="取消", command=self.destroy).pack(side=tk.RIGHT)
 
     def _on_save(self):
         try:
+            # 借币参数
+            target_ltv = max(5, min(80, float(self._target_ltv.get())))
+            self._cm.set_borrow_target_ltv(target_ltv)
+            self._cm.set_borrow_rate(float(self._rate_var.get()))
+
+            # LTV 自动保护
+            trigger_ltv = float(self._trigger_ltv.get().strip() or "70")
+            per_amount = self._per_amount.get().strip() or "100"
+            min_balance = self._min_balance.get().strip() or "500"
+            self._cm.set_protect(self._protect_enabled.get(), trigger_ltv, per_amount, min_balance)
+
+            # LTV 飞书提醒
+            ltv_str = self._ltv_threshold.get().strip()
+            if ltv_str:
+                self._cm.set_ltv_threshold(float(ltv_str))
+            interval = max(1, int(self._ltv_interval.get() or "60"))
+            self._cm.set_ltv_alert_interval(interval)
+
+            # LTV 自动纠错
             self._cm.set_ltv_correct(
-                enabled=self._enabled.get(),
+                enabled=self._correct_enabled.get(),
                 trigger_count=int(self._trigger_count.get()),
                 wait_seconds=int(self._wait_seconds.get()),
                 auto_restart=self._auto_restart.get(),
-                redundancy_ratio=float(self._redundancy.get()),
+                redundancy_ratio=85.0,
             )
+
             self._cm.save()
             self.destroy()
+            if self._on_save_cb:
+                self._on_save_cb()
+        except ValueError:
+            import tkinter.messagebox as mb
+            mb.showerror("保存失败", "请输入有效的数值", parent=self)
         except Exception as e:
             import tkinter.messagebox as mb
             mb.showerror("保存失败", str(e))
+
 
 class SettingsDialog(tk.Toplevel):
     """设置弹窗（非模态）"""
@@ -276,7 +400,6 @@ class SettingsDialog(tk.Toplevel):
                 feishu_webhook=self._feishu.get().strip(),
                 dingtalk_webhook=self._dingtalk.get().strip(),
             )
-            self._config_manager.set_borrow_rate(float(self._rate_var.get()))
             ltv_str = self._ltv_threshold.get().strip()
             if ltv_str:
                 self._config_manager.set_ltv_threshold(float(ltv_str))
@@ -914,7 +1037,6 @@ class MainWindow:
         ttk.Label(f, text=f"v{VERSION}", foreground="#9ca3af", font=("", 7)).pack(pady=(10, 0))
         ttk.Button(f, text="检查更新", width=8, command=self._check_update).pack()
         ttk.Button(f, text="设置", command=self._open_settings).pack(pady=(10, 0))
-        ttk.Button(f, text="保护", command=self._open_protect).pack(pady=(2, 10))
 
     def _build_right_panel(self):
         pad = {"pady": 5}
@@ -954,7 +1076,7 @@ class MainWindow:
         # LTV 纠错参数（原齿轮按钮）
         btn_row = ttk.Frame(form)
         btn_row.pack(pady=(0, 0))
-        self._ltv_correct_btn = ttk.Button(btn_row, text="⚙ LTV纠错", command=self._open_ltv_correct)
+        self._ltv_correct_btn = ttk.Button(btn_row, text="⚙ 借币设置", command=self._open_borrow_settings)
         self._ltv_correct_btn.pack(side=tk.LEFT, padx=(0, 10))
         self._ack_btn = tk.Button(btn_row, text="已借到", fg="white", bg="#dc2626",
                                    font=("", 9, "bold"), command=self._on_ack_borrow)
@@ -1154,7 +1276,7 @@ class MainWindow:
         SettingsDialog(self._root, self._config_manager, self._reinit_client)
 
     def _open_protect(self):
-        ProtectDialog(self._root, self._config_manager, self._reinit_client)
+        self._open_borrow_settings()
 
     def _open_positions(self):
         PositionsWindow(self._root, self._service)
@@ -1382,7 +1504,7 @@ class MainWindow:
             cur = row.coin_var.get().strip().upper()
             if cur != loan_coin:
                 return
-            info = self._service.calculate_max_borrow(loan_coin)
+            info = self._service.calculate_max_borrow(loan_coin, self._config.borrow_target_ltv / 100.0)
             # 币种不可借
             if not info.get("coin_borrowable", True):
                 lab = "该币种不可借"
@@ -1392,7 +1514,7 @@ class MainWindow:
             if info["can_borrow"] and float(info["max_amount"]) > 0:
                 max_amt = info["max_amount"]
                 real_max = str(int(float(max_amt)))
-                safe_amt = str(int(float(max_amt) * 0.85))
+                safe_amt = str(int(float(max_amt)))
                 lab = f"最大 {real_max} | LTV " + info["current_ltv"]
                 self._root.after(0, lambda r=row, l=lab: r.calc_var.set(l))
                 self._root.after(0, lambda r=row: r.calc_label.config(foreground="#10b981"))
@@ -1429,7 +1551,7 @@ class MainWindow:
             want = float(loan_amt)
             if want <= 0:
                 return
-            info = self._service.calculate_max_borrow(loan_coin)
+            info = self._service.calculate_max_borrow(loan_coin, self._config.borrow_target_ltv / 100.0)
             cur_ltv = info["current_ltv"]
             max_amt = info["max_amount"]
             if not info["can_borrow"]:
@@ -1464,9 +1586,9 @@ class MainWindow:
         for row in self._coin_rows:
             row.borrow_btn.config(state=state)
 
-    def _open_ltv_correct(self):
-        """打开 LTV 自动纠错参数设置"""
-        LtvCorrectDialog(self._root, self._config_manager)
+    def _open_borrow_settings(self):
+        """打开借币设置"""
+        BorrowSettingsDialog(self._root, self._config_manager, self._reinit_client)
 
     def _do_borrow(self, row):
         """启动/停止某行的循环借币"""
@@ -1485,7 +1607,7 @@ class MainWindow:
             messagebox.showwarning("提示", f"借币{row.index + 1}: 请填写币种和数量")
             return
         try:
-            info = self._service.calculate_max_borrow(coin)
+            info = self._service.calculate_max_borrow(coin, self._config.borrow_target_ltv / 100.0)
             want = float(amt)
             if info["can_borrow"] and want > float(info["max_amount"]):
                 msg = "当前LTV " + info["current_ltv"] + "\n最大可借 " + info["max_amount"] + " " + coin
@@ -1495,7 +1617,7 @@ class MainWindow:
             if price <= 0:
                 messagebox.showwarning("错误", "无法获取币价")
                 return
-            need_collateral = (want * price) / 0.80
+            need_collateral = (want * price) / (self._config.borrow_target_ltv / 100.0)
             col_amt = f"{need_collateral:.2f}"
         except Exception as e:
             messagebox.showwarning("计算失败", f"LTV检查异常: {e}")
@@ -1537,7 +1659,7 @@ class MainWindow:
                     price = self._service.get_coin_price(coin)
                     if price <= 0:
                         continue
-                    need_collateral = (float(amt) * price) / 0.80
+                    need_collateral = (float(amt) * price) / (self._config.borrow_target_ltv / 100.0)
                     col = f"{need_collateral:.2f}"
                 except Exception:
                     continue
@@ -1606,16 +1728,6 @@ class MainWindow:
                     reason = e.message[:60]
             if e.code == 148012 or "LTV" in e.message.upper() or "THRESHOLD" in e.message.upper() or "COLLATERAL" in e.message.upper():
                 row.fail_count += 1
-                # LTV超限时自动重算该行最大可借（其他币借走额度后数量需更新）
-                try:
-                    info = self._service.calculate_max_borrow(loan_coin)
-                    if info["can_borrow"] and float(info["max_amount"]) > 0:
-                        safe_amt = str(int(float(info["max_amount"]) * 0.85))
-                        self._root.after(0, lambda r=row, s=safe_amt: r.amount_var.set(s))
-                        self._root.after(0, lambda r=row, ml=info["max_amount"]:
-                            r.calc_var.set(f"已调整: 最大{int(float(ml))} | LTV " + info["current_ltv"]))
-                except Exception:
-                    pass
             else:
                 row.fail_count = 0
             # LTV 自动纠错检查（该行独立）
@@ -1743,6 +1855,11 @@ class MainWindow:
     def _log_local(self, time_str, direction, coin, amount, reason=""):
         """本地写入借贷记录表格"""
         self._history_tree.insert("", 0, values=(time_str, direction, coin, amount, reason))
+        # 保留最近20条
+        children = self._history_tree.get_children()
+        if len(children) > 20:
+            for child in children[20:]:
+                self._history_tree.delete(child)
 
     def _color_blink(self):
         """按钮颜色闪烁一次"""
