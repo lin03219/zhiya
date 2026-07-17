@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta
 from tkinter import ttk, messagebox
 import threading
+import time
 from dataclasses import dataclass
 import ctypes
 import ctypes.wintypes
@@ -455,7 +456,7 @@ class RepayDialog(tk.Toplevel):
         self._build()
         _center_window(self, parent)
         self.update_idletasks()
-        w = self.winfo_reqwidth() + 100
+        w = self.winfo_reqwidth() + 0
         self.minsize(w, 1)
 
     def _build(self):
@@ -487,8 +488,7 @@ class RepayDialog(tk.Toplevel):
         if not messagebox.askyesno("确认还款", f"确定还 {amt} {self._coin}？", parent=self):
             return
         try:
-            rid = self._service.repay_smart(self._coin, amt)
-            messagebox.showinfo("还款成功", f"还款ID: {rid}", parent=self)
+            self._service.repay_smart(self._coin, amt)
             if self._on_success:
                 self._on_success()
             self.destroy()
@@ -527,14 +527,14 @@ class PositionsWindow(tk.Toplevel):
         header.pack(fill=tk.X, padx=10, pady=(10, 2))
         for text, width, anchor in [
             ("借入币种", 8, tk.W),
-            ("欠款总额", 13, tk.CENTER),
-            ("累计利息", 13, tk.CENTER),
-            ("利率(时)", 10, tk.CENTER),
-            ("统一持有", 10, tk.CENTER),
-            ("资金持有", 10, tk.CENTER),
+            ("欠款总额", 11, tk.CENTER),
+            ("累计利息", 11, tk.CENTER),
+            ("利率/时/天", 22, tk.CENTER),
+            ("统一持有", 8, tk.CENTER),
+            ("资金持有", 8, tk.CENTER),
             ("操作", 24, tk.CENTER),
         ]:
-            ttk.Label(header, text=text, width=width, anchor=anchor, font=("", 9, "bold")).pack(side=tk.LEFT, padx=1)
+            ttk.Label(header, text=text, width=width, anchor=anchor, font=("", 9, "bold")).pack(side=tk.LEFT, padx=0)
         ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10)
         cf = ttk.Frame(self)
         cf.pack(fill=tk.BOTH, expand=True, padx=10, pady=2)
@@ -600,8 +600,19 @@ class PositionsWindow(tk.Toplevel):
                     interest_str = f"{acc_interest:.6f}" if acc_interest >= 0 else "0"
                 except Exception:
                     interest_str = "--"
-                rate = b.get("flexibleHourlyInterestRate", "0")
-                rp = f"{float(rate)*100:.5f}%" if rate else "--"
+                # 利率: 灵活(复利) or 固定
+                flex_debt = float(b.get("flexibleTotalDebt", "0"))
+                fixed_debt = float(b.get("fixedTotalDebt", "0"))
+                if flex_debt > 0:
+                    hour_rate = float(b.get("flexibleHourlyInterestRate", "0"))
+                    hour_pct = hour_rate * 100
+                    day_rate = (1 + hour_rate) ** 24 - 1
+                    day_pct = day_rate * 100
+                    rp = f"{hour_pct:.4f}% · {day_pct:.4f}% 复"
+                elif fixed_debt > 0:
+                    rp = f"-- 固"
+                else:
+                    rp = "--"
                 rows_data.append((coin, debt, interest_str, rp, unified_map.get(coin, "0"), fund_map.get(coin, "0")))
             cs = ", ".join(f"{c.get('currency', '')}: {c.get('amount', '')}" for c in cl) or "--"
             summary = f"抵押品: {cs}  |  总欠款 USD: ${td}  |  LTV: {ltv}"
@@ -616,12 +627,12 @@ class PositionsWindow(tk.Toplevel):
                     row = ttk.Frame(self._row_container)
                     row.pack(fill=tk.X, pady=1)
                     self._row_frames.append(row)
-                    ttk.Label(row, text=coin, width=8, anchor=tk.W).pack(side=tk.LEFT, padx=1)
-                    ttk.Label(row, text=debt, width=13, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
-                    ttk.Label(row, text=interest_str, width=13, anchor=tk.CENTER, foreground="#ef4444").pack(side=tk.LEFT, padx=1)
-                    ttk.Label(row, text=rp, width=10, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
-                    ttk.Label(row, text=uni_bal, width=10, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
-                    ttk.Label(row, text=fund_bal, width=10, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
+                    ttk.Label(row, text=coin, width=8, anchor=tk.W).pack(side=tk.LEFT, padx=0)
+                    ttk.Label(row, text=debt, width=11, anchor=tk.CENTER).pack(side=tk.LEFT, padx=0)
+                    ttk.Label(row, text=interest_str, width=11, anchor=tk.CENTER, foreground="#ef4444").pack(side=tk.LEFT, padx=0)
+                    ttk.Label(row, text=rp, width=22, anchor=tk.CENTER).pack(side=tk.LEFT, padx=0)
+                    ttk.Label(row, text=uni_bal, width=8, anchor=tk.CENTER).pack(side=tk.LEFT, padx=0)
+                    ttk.Label(row, text=fund_bal, width=8, anchor=tk.CENTER).pack(side=tk.LEFT, padx=0)
                     op = ttk.Frame(row)
                     op.pack(side=tk.LEFT, padx=1, fill=tk.X, expand=True)
                     ttk.Button(op, text="划转", width=5, command=lambda c=coin: self._transfer_coin(c)).pack(side=tk.LEFT, padx=2)
@@ -677,7 +688,7 @@ class PositionsWindow(tk.Toplevel):
             self._service.repay_smart(coin, debt)
             self.after(0, lambda: self._status_var.set(f"{coin} 还清成功"))
             self.after(0, lambda: messagebox.showinfo("还清成功", f"{coin} 已还清", parent=self))
-            self.after(0, self._refresh)
+            self.after(3000, self._refresh)
         except Exception as e:
             self.after(0, lambda: self._status_var.set(f"{coin} 还清失败"))
             self.after(0, lambda e=e: messagebox.showerror("还清失败", f"{coin}: {e}", parent=self))
@@ -714,11 +725,27 @@ class PositionsWindow(tk.Toplevel):
             coin = b.get("loanCurrency", "")
             debt = b.get("flexibleTotalDebt", "0")
             self.after(0, lambda c=coin, n=i + 1: self._status_var.set(f"正在还 {c}… ({n}/{total})"))
-            try:
-                self._service.repay_smart(coin, debt)
-                success.append(coin)
-            except Exception as e:
-                failed.append(f"{coin}: {e}")
+            ok = False
+            last_err = None
+            for attempt in range(3):
+                try:
+                    self._service.repay_smart(coin, debt)
+                    success.append(coin)
+                    ok = True
+                    break
+                except BybitApiError as e:
+                    if e.code == 148021 and attempt < 2:
+                        last_err = e
+                        time.sleep(3)
+                        continue
+                    last_err = e
+                    break
+                except Exception as e:
+                    last_err = e
+                    break
+            if not ok:
+                failed.append(f"{coin}: {last_err}")
+            time.sleep(2)
 
         def show_result():
             self._status_var.set("")
@@ -729,7 +756,7 @@ class PositionsWindow(tk.Toplevel):
                 parts.append(f"失败: {', '.join(failed)}")
             title = "全部还清" if not failed else "部分还清"
             messagebox.showinfo(title, "\n".join(parts), parent=self)
-            self._refresh()
+            self.after(3000, self._refresh)
         self.after(0, show_result)
 
 class TransferDialog(tk.Toplevel):
@@ -746,7 +773,7 @@ class TransferDialog(tk.Toplevel):
         self._build()
         _center_window(self, parent)
         self.update_idletasks()
-        w = self.winfo_reqwidth() + 100
+        w = self.winfo_reqwidth() + 0
         self.minsize(w, 1)
 
     def _build(self):

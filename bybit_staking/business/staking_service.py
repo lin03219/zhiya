@@ -270,8 +270,8 @@ class StakingService:
         return result.get("result", {}).get("repayId", "")
 
     def repay_from_collateral(self, loan_currency: str, amount: str) -> str:
-        """从抵押品还款（amount 为借入币种数量，USDT 自动从抵押品扣除）"""
-        body = {"loanCurrency": loan_currency, "amount": amount}
+        """从抵押品还款（amount 为借入币种数量，collateralCoin=USDT）"""
+        body = {"loanCurrency": loan_currency, "amount": amount, "collateralCoin": "USDT"}
         result = self._client.post("/v5/crypto-loan-flexible/repay-collateral", body=body)
         return result.get("result", {}).get("repayId", "")
 
@@ -304,10 +304,8 @@ class StakingService:
             return False
 
     def repay_smart(self, loan_currency: str, debt_amount: str) -> str:
-        """1查资金余额 2币还 3轮询position 4换算USDT 5抵押品补清"""
-        import decimal, time
+        """还款：先用币还(只还请求金额)，不足部分走抵押品USDT补"""
         rid = ""
-        # 步骤1: 查资金账户现币余额
         coin_bal = "0"
         try:
             for fb in self.get_fund_balance(loan_currency):
@@ -316,35 +314,16 @@ class StakingService:
                     break
         except Exception:
             pass
-        # 步骤2: 用现币还
-        if float(coin_bal) > 0:
+        repay_coin = min(float(coin_bal), float(debt_amount))
+        if repay_coin > 0:
             try:
-                rid = self.repay(loan_currency, coin_bal)
+                rid = self.repay(loan_currency, str(repay_coin))
             except Exception:
                 pass
-        # 步骤3: 轮询 position 直到数据更新（最多等 15 秒）
-        remaining = debt_amount
-        for _ in range(5):
-            time.sleep(3)
-            self._pos_cache = {}
-            pos = self.get_position()
-            for b in pos.get("borrowList", []):
-                if b.get("loanCurrency") == loan_currency:
-                    remaining = b.get("flexibleTotalDebt", "0")
-                    break
-            if float(remaining) <= 0:
-                return rid
-            if float(remaining) <= float(debt_amount):
-                break
-        # 步骤4+5: 剩余币数换算 USDT → 抵押品补清（USDT 不足 $0.01 跳过）
-        if float(remaining) > 0:
-            price = self.get_coin_price(loan_currency)
-            if price <= 0:
-                price = 1.0
-            usdt_amt = decimal.Decimal(remaining) * decimal.Decimal(str(price))
-            if usdt_amt >= decimal.Decimal("0.01"):
-                usdt_str = str(usdt_amt.quantize(decimal.Decimal("0.00000001"), rounding=decimal.ROUND_DOWN))
-                rid = self.repay_from_collateral(loan_currency, usdt_str)
+        shortfall = float(debt_amount) - repay_coin
+        if shortfall <= 0:
+            return rid
+        rid = self.repay_from_collateral(loan_currency, str(shortfall))
         return rid
 
     def get_position(self) -> dict:
