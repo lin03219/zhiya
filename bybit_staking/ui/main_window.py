@@ -13,7 +13,7 @@ import ctypes.wintypes
 from typing import Optional
 
 from ..config.config_manager import ConfigManager, AppConfig
-from ..version import VERSION, UPDATE_URL, RELEASES_URL
+from ..version import VERSION, UPDATE_URL, RELEASES_URL, CHANGELOG
 from ..api.bybit_client import BybitClient, BybitApiError, VpnStatus, ApiRateLimit
 from ..business.staking_service import StakingService
 from ..business.exchange_service import ExchangeService
@@ -1325,8 +1325,10 @@ class MainWindow:
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, **pad)
 
         # 设置
-        # 版本号
-        ttk.Label(f, text=f"v{VERSION}", foreground="#6b7280", font=("", 7)).pack(pady=(10, 0))
+        # 版本号（可点击查看更新日志）
+        ver_label = ttk.Label(f, text=f"v{VERSION}", foreground="#3b82f6", font=("", 8, "underline"), cursor="hand2")
+        ver_label.pack(pady=(10, 0))
+        ver_label.bind("<Button-1>", lambda e: self._show_changelog())
         ttk.Button(f, text="检查更新", width=8, command=self._check_update).pack()
         ttk.Button(f, text="设置", command=self._open_settings).pack(pady=(10, 0))
 
@@ -2334,6 +2336,37 @@ class MainWindow:
                 self._root.after(0, lambda: self._update_btn.config(text=f"v{remote_ver} 可用"))
         except Exception:
             pass
+
+    def _show_changelog(self):
+        """显示更新日志弹窗"""
+        win = tk.Toplevel(self._root)
+        win.title("更新日志")
+        win.resizable(False, False)
+        win.transient(self._root)
+        win.grab_set()
+
+        f = ttk.Frame(win, padding=15)
+        f.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(f, text="更新日志", font=("", 12, "bold")).pack(anchor=tk.W)
+
+        canvas = tk.Canvas(f, width=420, height=300, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(f, orient=tk.VERTICAL, command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor=tk.NW)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(10, 0))
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=(10, 0))
+
+        for ver, items in CHANGELOG.items():
+            ttk.Label(scroll_frame, text=f"v{ver}", font=("", 10, "bold"), foreground="#3b82f6").pack(anchor=tk.W, pady=(8, 2))
+            for item in items:
+                ttk.Label(scroll_frame, text=f"  • {item}", font=("", 9), wraplength=380).pack(anchor=tk.W, pady=1)
+
+        ttk.Button(f, text="关闭", command=win.destroy).pack(pady=(10, 0))
+        _center_window(win, self._root)
 
     def _open_update_url(self):
         """下载新版本并自动替换"""
