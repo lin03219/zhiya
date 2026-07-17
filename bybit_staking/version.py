@@ -1,11 +1,19 @@
 """
 閻楀牊婀版穱鈩冧紖
 """
-VERSION = "3.9.7"
+VERSION = "3.9.8"
 UPDATE_URL = "https://api.github.com/repos/lin03219/zhiya/releases/latest"
 RELEASES_URL = "https://github.com/lin03219/zhiya/releases"
 
 CHANGELOG = {
+    "3.9.8": [
+        "修复还款：移除repay多余collateralCoin参数，输入N只还N个",
+        "repay_smart 现币优先+USDT抵押品补齐，混合还款无残留",
+        "一键还清逐币间隔2秒+148021冲突自动重试3次",
+        "还款弹窗宽度缩小，还款ID不再弹窗，还清后3秒刷新持仓",
+        "持仓利率列显示时/天+复/固标识，利率自动计算",
+        "持仓列宽整体收紧，界面更紧凑",
+    ],
     "3.9.7": [
         "借币设置整合：LTV纠错、保护、飞书提醒合并为一个面板",
         "新增借币目标LTV参数(5~78%)，替代旧计算公式",
