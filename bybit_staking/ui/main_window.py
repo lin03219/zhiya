@@ -14,7 +14,7 @@ import ctypes.wintypes
 from typing import Optional
 
 from ..config.config_manager import ConfigManager, AppConfig
-from ..version import VERSION, UPDATE_URL, RELEASES_URL, CHANGELOG
+from ..version import VERSION, UPDATE_URL, RELEASES_URL, CHANGELOG, get_download_url
 from ..api.bybit_client import BybitClient, BybitApiError, VpnStatus, ApiRateLimit
 from ..business.staking_service import StakingService
 from ..business.exchange_service import ExchangeService
@@ -2359,7 +2359,7 @@ class MainWindow:
             remote_ver = data.get("tag_name", "").lstrip("v").split("_")[0]
             tag_name = data.get("tag_name", "")
             if remote_ver and remote_ver != VERSION:
-                dl_url = f"https://github.com/lin03219/zhiya/releases/download/{tag_name}/BybitStaking.exe"
+                dl_url = get_download_url(tag_name)
                 self._download_url = dl_url
                 self._root.after(0, lambda: self._update_btn.pack(side=tk.RIGHT, padx=5))
                 self._root.after(0, lambda: self._update_btn.config(text=f"v{remote_ver} 可用"))
