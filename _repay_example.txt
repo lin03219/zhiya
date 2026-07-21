@@ -1,0 +1,18 @@
+Request Example
+​
+HTTP
+Python
+Node.js
+POST
+ 
+/v5/crypto-loan-flexible/repay-collateral
+ 
+HTTP/1.1
+Host
+:
+ 
+api-testnet.bybit.com
+X-BAPI-SIGN
+:
+ 
+<span class=

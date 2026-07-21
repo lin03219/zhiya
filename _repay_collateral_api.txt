@@ -1,0 +1,34 @@
+9" y="9" width="13" height="13" rx="2" ry="2">
+Copy
+Request Parameters
+​
+Parameter
+Required
+Type
+Comments
+loanCurrency
+true
+string
+Loan coin name
+collateralCoin
+true
+string
+Collateral currencies: Use commas to separate multiple collateral currencies
+amount
+true
+string
+Repay amount
+Response Parameters
+​
+None
+Request Example
+​
+HTTP
+Python
+Node.js
+POST
+ 
+/v5/crypto-loan-flexible/repay-collateral
+ 
+HTTP/1.1
+<span class="toke
