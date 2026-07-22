@@ -1,4 +1,4 @@
-"""
+﻿"""
 桌面主界面 — 简洁版
 左侧信息栏 + 右侧操作区 + 弹窗（设置、持仓、划转）
 """
@@ -1210,7 +1210,7 @@ class AdjustCollateralDialog(tk.Toplevel):
         except ValueError:
             messagebox.showwarning("提示", "请输入有效金额", parent=self)
             return
-        direction = "0" if self._tab == "add" else "1"
+        direction = 0 if self._tab == "add" else 1
         action = "追加" if self._tab == "add" else "减少"
         msg = "确认{0}抵押品 {1:.2f} USDT？".format(action, amt)
         if not _confirm_dialog(self, "确认操作", msg):

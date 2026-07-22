@@ -1,4 +1,4 @@
-﻿"""
+"""
 质押借币业务模块
 支持质押、借币、还款、持仓/订单查询、利息查询、余额查询、账内划转
 """
@@ -408,7 +408,7 @@ class StakingService:
         body = {
             "currency": currency,
             "amount": amount,
-            "direction": int(direction),
+            "direction": direction,
         }
         result = self._client.post("/v5/crypto-loan-common/adjust-ltv", body=body)
         return result.get("result", {}).get("adjustId", "")
