@@ -1,9 +1,9 @@
-"""
+﻿"""
 版本管理模块
 """
 import base64
 
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 XOR_KEY = "bybit_staking_xor_key_2026!"
 
 _ENC_UPDATE_URL = "Cg0WGQdlXFsAGwBAADYMBwc9RQYWMh1CV0ZOEVYOABpvQEZQUkYUDzYBDl0tDgkcPkFVQRlNAw0HGgA="
@@ -23,8 +23,7 @@ def get_download_url(tag_name: str) -> str:
     return f"{_DOWNLOAD_BASE}/{tag_name}/BybitStaking.exe"
 
 CHANGELOG = {
-    "4.0.0": ["修复卡顿问题"],
-    "3.9.9": ["正式版"],
+    "4.1.0": ["正式版"],
     "3.9.8": [
         "修复还款：移除Repay多余collateralCoin参数，输入U只还N个",
         "repay_smart 现币优先+USDT抵押品补齐，混合还款无残留",
