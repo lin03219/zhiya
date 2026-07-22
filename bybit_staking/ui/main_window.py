@@ -1217,12 +1217,16 @@ class AdjustCollateralDialog(tk.Toplevel):
             return
         try:
             adjust_id = self._service.adjust_collateral("USDT", str(amt), direction)
+            if hasattr(self._main_window, "_debug_log"):
+                self._main_window._debug_log(f"{action}抵押品成功: {amt:.2f} USDT (adjustId={adjust_id})")
             if self._on_success:
                 self._on_success()
                 # 3秒后二次刷新，确保余额接口已更新
                 self.after(3000, self._on_success)
             self.destroy()
         except Exception as e:
+            if hasattr(self._main_window, "_debug_log"):
+                self._main_window._debug_log(f"{action}抵押品失败: {str(e)[:100]}")
             messagebox.showerror("失败", "{0}抵押品失败: {1}".format(action, str(e)[:100]), parent=self)
 
 
