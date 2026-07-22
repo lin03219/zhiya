@@ -122,8 +122,8 @@ class Notifier:
         title = "\U0001f6e1 保护追加抵押成功"
         content = (
             f"**操作**: 自动追加抵押\n"
-            f"**划转金额**: {transfer_amount} USDT\n"
-            f"**当前 LTV**: {current_ltv}\n"
+            f"**划转金额**: {str(transfer_amount)} USDT\n"
+            f"**当前 LTV**: {str(current_ltv)}\n"
             f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         return self.send(title, content, platform="feishu")
@@ -136,8 +136,8 @@ class Notifier:
         """保护追加抵押失败告警"""
         title = "\u26a0\ufe0f 保护追加抵押失败"
         content = (
-            f"**失败原因**: {reason}\n"
-            f"**当前 LTV**: {current_ltv}\n"
+            f"**失败原因**: {str(reason)}\n"
+            f"**当前 LTV**: {str(current_ltv)}\n"
             f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
             f"\u2757 请及时检查账户余额，手动追加抵押"
         )

@@ -5,6 +5,7 @@
 import tkinter as tk
 import json
 from datetime import datetime, timedelta
+from collections import deque
 from tkinter import ttk, messagebox
 import threading
 import time
@@ -444,12 +445,13 @@ class SettingsDialog(tk.Toplevel):
 
 class RepayDialog(tk.Toplevel):
     """还币弹窗 — 手动输入币数还款"""
-    def __init__(self, parent, service, coin, debt_amount, on_success=None):
+    def __init__(self, parent, service, coin, debt_amount, on_success=None, log_func=None):
         super().__init__(parent)
         self._service = service
         self._coin = coin
         self._debt = debt_amount
         self._on_success = on_success
+        self._log_func = log_func
         self.title(f"还款 — {coin}")
         self.resizable(False, False)
         self.transient(parent)
@@ -487,18 +489,25 @@ class RepayDialog(tk.Toplevel):
             return
         if not messagebox.askyesno("确认还款", f"确定还 {amt} {self._coin}？", parent=self):
             return
+        if self._log_func:
+            self._log_func(f"还款 {self._coin} {amt} 开始")
         try:
             self._service.repay_smart(self._coin, amt)
+            if self._log_func:
+                self._log_func(f"还款成功: {self._coin} {amt}")
             if self._on_success:
                 self._on_success()
             self.destroy()
         except Exception as e:
+            if self._log_func:
+                self._log_func(f"还款失败: {self._coin} {amt} - {e}")
             messagebox.showerror("还款失败", str(e), parent=self)
 
 class PositionsWindow(tk.Toplevel):
-    def __init__(self, parent, service):
+    def __init__(self, parent, service, log_func=None):
         super().__init__(parent)
         self._service = service
+        self._log_func = log_func
         self._row_frames = []
         self._auto_refresh_id = None
         self.title("当前持仓")
@@ -645,7 +654,7 @@ class PositionsWindow(tk.Toplevel):
             self.after(0, lambda e=e: messagebox.showerror("查询失败", str(e), parent=self))
 
     def _transfer_coin(self, coin):
-        dlg = TransferDialog(self, self._service, on_success=self._refresh)
+        dlg = TransferDialog(self, self._service, on_success=self._refresh, log_func=self._log_func)
         dlg._coin.set(coin)
 
     def _repay_coin(self, coin):
@@ -659,7 +668,7 @@ class PositionsWindow(tk.Toplevel):
                     break
         except Exception:
             pass
-        RepayDialog(self, self._service, coin, debt, on_success=self._refresh)
+        RepayDialog(self, self._service, coin, debt, on_success=self._refresh, log_func=self._log_func)
 
     def _repay_clear_coin(self, coin):
         """还清单个币种：先划转资金账户该币 → 再用币还本金 → 利息走 USDT 抵押品"""
@@ -677,6 +686,8 @@ class PositionsWindow(tk.Toplevel):
                 return
             if not messagebox.askyesno("确认还清", f"确定还清 {coin}？\n欠款总额: {debt}", parent=self):
                 return
+            if self._log_func:
+                self._log_func(f"还清 {coin} {debt} 开始")
             threading.Thread(target=self._run_repay_clear, args=(coin, debt), daemon=True).start()
         except Exception as e:
             messagebox.showerror("错误", str(e), parent=self)
@@ -686,10 +697,14 @@ class PositionsWindow(tk.Toplevel):
         self.after(0, lambda: self._status_var.set(f"正在还清 {coin}..."))
         try:
             self._service.repay_smart(coin, debt)
+            if self._log_func:
+                self._log_func(f"还清成功: {coin} {debt}")
             self.after(0, lambda: self._status_var.set(f"{coin} 还清成功"))
             self.after(0, lambda: messagebox.showinfo("还清成功", f"{coin} 已还清", parent=self))
             self.after(3000, self._refresh)
         except Exception as e:
+            if self._log_func:
+                self._log_func(f"还清失败: {coin} {debt} - {e}")
             self.after(0, lambda: self._status_var.set(f"{coin} 还清失败"))
             self.after(0, lambda e=e: messagebox.showerror("还清失败", f"{coin}: {e}", parent=self))
 
@@ -712,6 +727,8 @@ class PositionsWindow(tk.Toplevel):
             lines.append(f"共 {len(bl)} 个币种")
             if not messagebox.askyesno("确认一键还清全部", "\n".join(lines), parent=self):
                 return
+            if self._log_func:
+                self._log_func(f"一键还清全部 开始 ({len(bl)}币种)")
             threading.Thread(target=self._run_repay_all, args=(bl,), daemon=True).start()
         except Exception as e:
             messagebox.showerror("失败", str(e), parent=self)
@@ -732,6 +749,8 @@ class PositionsWindow(tk.Toplevel):
                     self._service.repay_smart(coin, debt)
                     success.append(coin)
                     ok = True
+                    if self._log_func:
+                        self._log_func(f"还清成功: {coin} {debt}")
                     break
                 except BybitApiError as e:
                     if e.code == 148021 and attempt < 2:
@@ -745,6 +764,8 @@ class PositionsWindow(tk.Toplevel):
                     break
             if not ok:
                 failed.append(f"{coin}: {last_err}")
+                if self._log_func:
+                    self._log_func(f"还清失败: {coin} {debt} - {last_err}")
             time.sleep(2)
 
         def show_result():
@@ -755,6 +776,8 @@ class PositionsWindow(tk.Toplevel):
             if failed:
                 parts.append(f"失败: {', '.join(failed)}")
             title = "全部还清" if not failed else "部分还清"
+            if self._log_func:
+                self._log_func(f"一键还清完成 成功{len(success)}/失败{len(failed)}")
             messagebox.showinfo(title, "\n".join(parts), parent=self)
             self.after(3000, self._refresh)
         self.after(0, show_result)
@@ -762,9 +785,10 @@ class PositionsWindow(tk.Toplevel):
 class TransferDialog(tk.Toplevel):
     """划转弹窗 — 统一账户 ↔ 资金账户"""
 
-    def __init__(self, parent, service: Optional[StakingService], on_success=None):
+    def __init__(self, parent, service: Optional[StakingService], on_success=None, log_func=None):
         super().__init__(parent)
         self._service = service
+        self._log_func = log_func
         self._on_success = on_success
         self.title("账内划转 — 统一 ↔ 资金")
         self.resizable(False, False)
@@ -846,14 +870,20 @@ class TransferDialog(tk.Toplevel):
         if not _confirm_dialog(self, "确认划转", label):
             return
         c, a, f, t = coin, amount, from_acc, to_acc
+        if self._log_func:
+            self._log_func(f"划转 {amount} {coin} {from_acc} -> {to_acc} 开始")
         threading.Thread(target=self._run_transfer, args=(c, a, f, t), daemon=True).start()
 
     def _run_transfer(self, coin, amount, from_acc, to_acc):
         try:
             tid = self._service.transfer(coin, amount, from_acc, to_acc)
+            if self._log_func:
+                self._log_func(f"划转成功: {amount} {coin} {from_acc} -> {to_acc} (tid={tid})")
             if self._on_success:
                 self.after(0, self._on_success)
         except BybitApiError as e:
+            if self._log_func:
+                self._log_func(f"划转失败: {amount} {coin} {from_acc} -> {to_acc} - {e}")
             self.after(0, lambda e=e: messagebox.showerror("划转失败", str(e), parent=self))
 
 class ProtectDialog(tk.Toplevel):
@@ -1196,6 +1226,54 @@ class AdjustCollateralDialog(tk.Toplevel):
             messagebox.showerror("失败", "{0}抵押品失败: {1}".format(action, str(e)[:100]), parent=self)
 
 
+class DebugLogWindow(tk.Toplevel):
+    """调试日志窗口"""
+
+    def __init__(self, parent, logs):
+        super().__init__(parent)
+        self.title("调试日志")
+        self.geometry("700x450")
+        self.transient(parent)
+        self._build(logs)
+        self.update_idletasks()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        ww = self.winfo_width()
+        wh = self.winfo_height()
+        self.geometry(f"+{px + (pw - ww) // 2}+{py + (ph - wh) // 2}")
+
+    def _build(self, logs):
+        frame = ttk.Frame(self, padding=5)
+        frame.pack(fill=tk.BOTH, expand=True)
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(toolbar, text=f"最近 {len(logs)} 条日志",
+                  font=("", 9, "bold")).pack(side=tk.LEFT)
+        copy_btn = ttk.Button(toolbar, text="复制全部",
+                              command=self._copy_all)
+        copy_btn.pack(side=tk.RIGHT)
+        text_frame = ttk.Frame(frame)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        self._text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9),
+                             bg="#1e1e1e", fg="#d4d4d4")
+        scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self._text.yview)
+        self._text.configure(yscrollcommand=scroll.set)
+        self._text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        for line in logs:
+            self._text.insert(tk.END, line + "\n")
+        self._text.configure(state=tk.DISABLED)
+
+    def _copy_all(self):
+        self._text.configure(state=tk.NORMAL)
+        c = self._text.get("1.0", tk.END)
+        self._text.configure(state=tk.DISABLED)
+        self.clipboard_clear()
+        self.clipboard_append(c)
+
+
 class MainWindow:
     """主窗口 — 简洁版"""
 
@@ -1233,6 +1311,7 @@ class MainWindow:
         self._root.geometry(f"{ww}x{wh}+{(sw - ww) // 2}+{(sh - wh) // 2}")
 
         self._protect_service = None
+        self._debug_logs = deque(maxlen=200)  # 环形日志缓冲区
         self._BORROW_ERROR_MAP = {
             148012: "抵押品(USDT)余额不足",
             148011: "借币池余额不足",
@@ -1255,12 +1334,17 @@ class MainWindow:
         self._root.after(2000, self._ltv_display_timer)  # LTV 屏幕刷新（2秒起步）
         self._root.after(5000, self._check_update)  # 首次检查，之后每30分钟
 
+    def _debug_log(self, msg: str):
+        """写入调试日志到环形缓冲区"""
+        ts = datetime.now().strftime("%m-%d %H:%M:%S")
+        self._debug_logs.append(f"[{ts}] {msg}")
+
     def _init_client(self):
         if self._config.api_key and self._config.api_secret:
             self._client = BybitClient(self._config)
             self._service = StakingService(self._client)
             self._notifier = Notifier(self._config.notify)
-            self._protect_service = ProtectService(self._client, self._config.protect, self._notifier)
+            self._protect_service = ProtectService(self._client, self._config.protect, self._notifier, log_func=self._debug_log)
 
     def _reinit_client(self):
         self._config = self._config_manager.get_config()
@@ -1358,6 +1442,7 @@ class MainWindow:
         ver_label = ttk.Label(f, text=f"v{VERSION}", foreground="#3b82f6", font=("", 8, "underline"), cursor="hand2")
         ver_label.pack(pady=(10, 0))
         ver_label.bind("<Button-1>", lambda e: self._show_changelog())
+        ver_label.bind("<Control-Button-1>", lambda e: self._show_debug_log())
         ttk.Button(f, text="检查更新", width=8, command=self._check_update).pack()
         ttk.Button(f, text="设置", command=self._open_settings).pack(pady=(10, 0))
 
@@ -1628,10 +1713,10 @@ class MainWindow:
         self._open_borrow_settings()
 
     def _open_positions(self):
-        PositionsWindow(self._root, self._service)
+        PositionsWindow(self._root, self._service, log_func=self._debug_log)
 
     def _open_transfer(self):
-        TransferDialog(self._root, self._service, on_success=self._refresh_all)
+        TransferDialog(self._root, self._service, on_success=self._refresh_all, log_func=self._debug_log)
 
     def _open_exchange(self):
         if not self._client:
@@ -2365,6 +2450,10 @@ class MainWindow:
                 self._root.after(0, lambda: self._update_btn.config(text=f"v{remote_ver} 可用"))
         except Exception:
             pass
+
+    def _show_debug_log(self):
+        """打开调试日志窗口"""
+        DebugLogWindow(self._root, list(self._debug_logs))
 
     def _show_changelog(self):
         """显示更新日志弹窗"""
