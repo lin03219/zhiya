@@ -408,7 +408,7 @@ class StakingService:
         body = {
             "currency": currency,
             "amount": amount,
-            "direction": int(direction),
+            "direction": direction,
         }
         result = self._client.post("/v5/crypto-loan-common/adjust-ltv", body=body)
         return result.get("result", {}).get("adjustId", "")
