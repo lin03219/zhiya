@@ -25,6 +25,7 @@ class ApiRateLimit:
     used: int = 0
     banned: bool = False
     banned_until: float = 0.0  # 解封时间戳
+    tier: int = 0  # 限流档位: 0无/2 IP访问超限/3 IP封禁
 
 
 @dataclass
@@ -195,14 +196,21 @@ class BybitClient:
             if e.code == 429:
                 import time as _t
                 self._rate_limit.banned = True
-                self._rate_limit.banned_until = _t.time() + 300
+                self._rate_limit.banned_until = _t.time() + 360
+                self._rate_limit.tier = 2
                 retry_after = e.headers.get("Retry-After", "")
                 if retry_after:
                     try:
-                        self._rate_limit.banned_until = _t.time() + int(retry_after)
+                        self._rate_limit.banned_until = _t.time() + max(360, int(retry_after))
                     except Exception:
                         pass
-                raise BybitApiError(e.code, "请求过于频繁，已被限流封禁")
+                raise BybitApiError(e.code, "请求过于频繁，已触发②档限流(IP访问超限)")
+            if e.code == 403:
+                import time as _t
+                self._rate_limit.banned = True
+                self._rate_limit.banned_until = _t.time() + 1800
+                self._rate_limit.tier = 3
+                raise BybitApiError(e.code, "IP已被封禁，已触发③档限流")
             try:
                 body_text = e.read().decode("utf-8")
                 result = json.loads(body_text)

@@ -1338,6 +1338,8 @@ class MainWindow:
         self._orig_wndproc = None
         self._root.protocol("WM_DELETE_WINDOW", self._minimize_to_tray)
         self._last_quota_warned = False
+        self._rate_limit_strikes = 0  # ①档限流连续次数（全局）
+        self._rl_dlg_open = False  # 限流弹窗是否已打开
         self._root.after(1000, self._check_minimize)  # 轮询检测最小化  # ??????
         self._download_url = None  # 新版本下载地址        self._root.after(1000, self._ban_check_timer)
         self._root.after(15000, self._ltv_alert_timer)  # LTV 飞书提醒
@@ -2033,6 +2035,152 @@ class MainWindow:
         for row in self._coin_rows:
             row.borrow_btn.config(state=state)
 
+    def _stop_all_loops(self):
+        """停止所有借币行循环（限流触发时调用，线程安全）"""
+        for r in self._coin_rows:
+            if r.looping:
+                r.looping = False
+            self._root.after(0, lambda r=r: r.borrow_btn.config(text=f"借币{r.index + 1}"))
+
+    def _handle_rate_limit_tier(self, e: BybitApiError) -> bool:
+        """三档限流检测：命中后停止全部借币+弹窗+飞书，返回True表示已处理"""
+        msg = e.message.upper()
+        if e.code == 403:
+            self._rate_limit_strikes = 0
+            self._trigger_rate_limit_tier(
+                3, "IP 已被 Bybit 封禁（HTTP 403）", "请更换 IP / 重启 VPN",
+                ban_seconds=1800, show_countdown=False,
+            )
+            return True
+        if e.code == 429:
+            self._rate_limit_strikes = 0
+            self._trigger_rate_limit_tier(
+                2, "IP 访问超限（HTTP 429）", "请降低借币速率或暂停借币",
+                ban_seconds=360, show_countdown=True,
+            )
+            return True
+        if e.code == 10006 or "TOO_MANY_VISITS" in msg or "RATE_LIMIT" in msg:
+            self._rate_limit_strikes += 1
+            if self._rate_limit_strikes >= 3:
+                self._rate_limit_strikes = 0
+                self._trigger_rate_limit_tier(
+                    1, "连续3次接口限流（10006）",
+                    "请降低借币速率（当前 {0:.1f} 秒）".format(self._config.borrow_rate),
+                    ban_seconds=0, show_countdown=False,
+                )
+                return True
+            return False
+        # 其他错误重置①档计数（保持"连续"语义）
+        self._rate_limit_strikes = 0
+        return False
+
+    def _trigger_rate_limit_tier(self, tier, cause, advice, ban_seconds=0, show_countdown=False):
+        """触发限流档位：停止所有借币 + 弹窗 + 飞书"""
+        until = time.time() + ban_seconds if ban_seconds > 0 else 0
+        self._stop_all_loops()
+        now = time.strftime("%m-%d %H:%M:%S")
+        self._root.after(0, lambda n=now, t=tier, c=cause: self._log_local(n, "限流⛔", "-", "-", f"已触发{t}档限流: {c}"))
+        self._root.after(0, lambda t=tier: self._set_status(f"⛔ 已触发{t}档限流，停止所有借币"))
+        self._root.after(0, lambda: self._show_rate_limit_dialog(tier, cause, advice, until, show_countdown))
+        if self._notifier:
+            self._notifier.send(
+                f"限流提醒（第{tier}档）",
+                f"已触发{tier}档限流\n原因: {cause}\n状态: 已停止所有借币\n建议: {advice}\n时间: {now}",
+                platform="all",
+            )
+
+    def _show_rate_limit_dialog(self, tier, cause, advice, until=0, show_countdown=False):
+        """限流提醒弹窗（居中模态，②档带实时倒计时）"""
+        if self._rl_dlg_open:
+            return
+        self._rl_dlg_open = True
+        cfg = {
+            1: ("⚠️", "#d97706", "已触发①档限流"),
+            2: ("🚫", "#dc2626", "已触发②档限流"),
+            3: ("⛔", "#7f1d1d", "已触发③档限流"),
+        }
+        icon, header_bg, header_text = cfg[tier]
+
+        def on_close():
+            self._rl_dlg_open = False
+            dlg.destroy()
+
+        dlg = tk.Toplevel(self._root)
+        dlg.title("限流提醒")
+        dlg.resizable(False, False)
+        dlg.transient(self._root)
+        dlg.grab_set()
+        dlg.configure(bg="white")
+        dlg.protocol("WM_DELETE_WINDOW", on_close)
+
+        header = tk.Frame(dlg, bg=header_bg, height=64)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        tk.Label(header, text=icon, font=("", 22), bg=header_bg, fg="white").pack(side=tk.LEFT, padx=(18, 10), pady=12)
+        tk.Label(header, text=header_text, font=("", 14, "bold"), bg=header_bg, fg="white").pack(side=tk.LEFT, pady=12)
+
+        body = tk.Frame(dlg, bg="white")
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=16)
+        card = tk.Frame(body, bg="#f9fafb", highlightbackground="#e5e7eb", highlightthickness=1)
+        card.pack(fill=tk.X)
+
+        info_rows = [
+            ("触发原因", cause),
+            ("当前状态", "已停止所有借币"),
+            ("处理建议", advice),
+        ]
+        labels = {}
+        if tier == 2:
+            info_rows.append(("禁用倒计时", "⏳ 计算中"))
+            info_rows.append(("解除时间", "6分钟后自动恢复"))
+        elif tier == 3:
+            info_rows.append(("禁用时长", "30分钟"))
+        info_rows.append(("飞书通知", "已发送"))
+
+        for label, value in info_rows:
+            row = tk.Frame(card, bg="#f9fafb")
+            row.pack(fill=tk.X, padx=14, pady=6)
+            tk.Label(row, text=label, font=("", 10), bg="#f9fafb", fg="#6b7280", width=10, anchor="w").pack(side=tk.LEFT)
+            val_lbl = tk.Label(row, text=value, font=("", 10, "bold"), bg="#f9fafb", fg="#374151", anchor="w")
+            val_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            labels[label] = val_lbl
+
+        btn_row = tk.Frame(dlg, bg="white")
+        btn_row.pack(pady=(0, 14))
+
+        def on_extra():
+            on_close()
+            self._open_borrow_settings()
+
+        if tier == 1:
+            tk.Button(btn_row, text="知道了", font=("", 10),
+                      bg="#e5e7eb", fg="#374151", relief="flat", padx=16, pady=4,
+                      command=on_close).pack(side=tk.LEFT, padx=(0, 8))
+            tk.Button(btn_row, text="去调整速率", font=("", 10, "bold"),
+                      bg="#3b82f6", fg="white", relief="flat", padx=16, pady=4,
+                      command=on_extra).pack(side=tk.LEFT)
+        else:
+            tk.Button(btn_row, text="知道了", font=("", 10, "bold"),
+                      bg="#3b82f6", fg="white", relief="flat", padx=16, pady=4,
+                      command=on_close).pack(side=tk.LEFT)
+
+        # ②档实时倒计时
+        if tier == 2 and until > 0:
+            def tick():
+                try:
+                    remaining = int(until - time.time())
+                    if remaining <= 0:
+                        labels["禁用倒计时"].config(text="⏳ 已解除")
+                        return
+                    mins, secs = divmod(remaining, 60)
+                    labels["禁用倒计时"].config(text=f"⏳ {mins}分{secs}秒")
+                    dlg.after(1000, tick)
+                except tk.TclError:
+                    pass
+            tick()
+
+        _center_window(dlg, self._root)
+
     def _open_borrow_settings(self):
         """打开借币设置"""
         BorrowSettingsDialog(self._root, self._config_manager, self._reinit_client)
@@ -2187,6 +2335,7 @@ class MainWindow:
         try:
             col_coin = "USDT"
             order_id = self._service.borrow(col_coin, loan_coin, col_amt, loan_amt)
+            self._rate_limit_strikes = 0  # 借币成功重置①档限流计数
             # 成功
             self._root.after(0, lambda n=now, lc=loan_coin, la=loan_amt:
                 self._log_local(n, "借入\u2705", lc, la, "成功"))
@@ -2205,6 +2354,9 @@ class MainWindow:
                         break
                 if not reason:
                     reason = e.message[:60]
+            # 三档限流检测（全局：命中后停止所有借币并弹窗）
+            if self._handle_rate_limit_tier(e):
+                return
             if e.code == 148012 or "LTV" in e.message.upper() or "THRESHOLD" in e.message.upper() or "COLLATERAL" in e.message.upper():
                 row.fail_count += 1
             else:
