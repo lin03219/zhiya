@@ -167,7 +167,7 @@ class BorrowSettingsDialog(tk.Toplevel):
         # 借币请求速率
         _tip = ttk.Label(param_frame, text="借币请求速率:")
         _tip.pack(anchor=tk.W)
-        ToolTip(_tip, "间隔+随机0.01~0.5秒防限流")
+        ToolTip(_tip, "间隔+随机0.01~0.15秒防限流")
         rate_row = ttk.Frame(param_frame)
         rate_row.pack(fill=tk.X, pady=(2, 0))
         self._rate_var = tk.StringVar(value=str(self._config.borrow_rate))
@@ -252,6 +252,11 @@ class BorrowSettingsDialog(tk.Toplevel):
         self._ltv_interval.insert(0, str(alert_cfg.ltv_alert_interval))
         ttk.Label(int_row, text="秒", foreground=hint_color, font=hint_font).pack(side=tk.LEFT, padx=4)
 
+        self._quota_feishu = tk.BooleanVar(value=alert_cfg.quota_feishu_enabled)
+        _cb = ttk.Checkbutton(alert_frame, text="配额不足飞书提醒", variable=self._quota_feishu)
+        _cb.pack(anchor=tk.W, pady=(4, 0))
+        ToolTip(_cb, "连续3次配额不足时飞书推送")
+
         # ===== 右列：LTV 自动纠错 =====
         correct_cfg = self._config.ltv_correct
         correct_frame = ttk.LabelFrame(right, text="LTV 自动纠错", padding=6)
@@ -318,6 +323,7 @@ class BorrowSettingsDialog(tk.Toplevel):
                 self._cm.set_ltv_threshold(float(ltv_str))
             interval = max(1, int(self._ltv_interval.get() or "60"))
             self._cm.set_ltv_alert_interval(interval)
+            self._cm.set_quota_feishu_enabled(self._quota_feishu.get())
 
             # LTV 自动纠错
             self._cm.set_ltv_correct(
@@ -1592,7 +1598,10 @@ class MainWindow:
         # 重新编号
         for i, r in enumerate(self._coin_rows):
             r.index = i
-            r.borrow_btn.config(text=f"借币{i + 1}")
+            if r.looping:
+                r.borrow_btn.config(text=f"停止{i + 1}")
+            else:
+                r.borrow_btn.config(text=f"借币{i + 1}")
             # 更新序号标签
             for child in r.frame.winfo_children():
                 if isinstance(child, ttk.Label):
@@ -2028,6 +2037,38 @@ class MainWindow:
         """打开借币设置"""
         BorrowSettingsDialog(self._root, self._config_manager, self._reinit_client)
 
+    def _start_borrow_silent(self, row):
+        """纠错后静默发起借币（不弹确认框）"""
+        if not self._service:
+            return
+        coin = row.coin_var.get().strip().upper()
+        amt = row.amount_var.get().strip()
+        if not coin or not amt:
+            return
+        try:
+            info = self._service.calculate_max_borrow(coin, self._config.borrow_target_ltv / 100.0)
+            want = float(amt)
+            if info["can_borrow"] and want > float(info["max_amount"]):
+                self._set_status(f"⚠ 借币{row.index+1}纠错后仍超LTV限制，放弃发起")
+                return
+            price = self._service.get_coin_price(coin)
+            if price <= 0:
+                self._set_status(f"⚠ 借币{row.index+1}无法获取币价")
+                return
+            need_collateral = (want * price) / (self._config.borrow_target_ltv / 100.0)
+            col_amt = f"{need_collateral:.2f}"
+        except Exception as e:
+            self._set_status(f"⚠ 借币{row.index+1}静默发起异常: {e}")
+            return
+        # 直接启动循环（跳过确认弹窗）
+        row.looping = True
+        row.fail_count = 0
+        row.borrow_btn.config(text=f"停止{row.index + 1}")
+        self._set_status(f"借币{row.index+1} 循环中...")
+        if not hasattr(self, "_scheduler_running") or not self._scheduler_running:
+            self._scheduler_running = True
+            self._run_async(lambda r=row, c=col_amt, lc=coin: self._scheduler_loop(r, lc, c))
+
     def _do_borrow(self, row):
         """启动/停止某行的循环借币"""
         if row.looping:
@@ -2079,7 +2120,7 @@ class MainWindow:
         # 先借第一笔
         self._borrow_once(init_row, loan_coin, col_amt)
         base_rate = self._config_manager.get_config().borrow_rate
-        delay = base_rate + random.uniform(0.01, 0.5)
+        delay = base_rate + random.uniform(0.01, 0.15)
         _time.sleep(delay)
         # 轮询所有活跃行
         while self._has_any_looping():
@@ -2103,7 +2144,7 @@ class MainWindow:
                     continue
                 self._borrow_once(row, coin, col)
                 base_rate = self._config_manager.get_config().borrow_rate
-                delay = base_rate + random.uniform(0.01, 0.5)
+                delay = base_rate + random.uniform(0.01, 0.15)
                 _time.sleep(delay)
         self._scheduler_running = False
 
@@ -2190,7 +2231,7 @@ class MainWindow:
                 row.quota_fail_count += 1
                 if row.quota_fail_count >= 3:
                     row.quota_fail_count = 0
-                    if self._notifier:
+                    if self._notifier and self._config.notify.quota_feishu_enabled:
                         self._notifier.send(
                             "配额不足提醒",
                             f"借币{row.index+1}\n币种: {loan_coin}\n数量: {loan_amt}\n原因: {reason}\n已连续3次配额不足，继续重试中",
@@ -2220,24 +2261,22 @@ class MainWindow:
             if not coin:
                 self._set_status(f"\u26a0 纠错: 借币{row.index+1}未输入币种")
                 return
-            result = self._service.calculate_collateral(coin, "1")
-            max_loan = float(result.get("max_loan", "0"))
-            if max_loan <= 0:
-                self._set_status(f"\u26a0 纠错: 借币{row.index+1}不可借或最大可借为0")
+            target_ltv = self._config.borrow_target_ltv / 100.0
+            info = self._service.calculate_max_borrow(coin, target_ltv)
+            if not info["can_borrow"] or float(info["max_amount"]) <= 0:
+                self._set_status(f"\u26a0 纠错: 借币{row.index+1}不可借或可借为0")
                 return
-            safe_amount = max_loan * (redundancy_ratio / 100.0)
-            safe_str = str(int(safe_amount))
+            safe_str = str(int(float(info["max_amount"])))
             self._root.after(0, lambda r=row, s=safe_str: r.amount_var.set(s))
-            self._root.after(0, lambda r=row, ml=max_loan, sr=safe_str, rr=redundancy_ratio:
-                r.calc_var.set(f"已纠错: 最大{ml:.0f} -> 填入{sr}({rr}%)"))
-            self._root.after(0, lambda ri=row.index, sr=safe_str, rr=redundancy_ratio:
-                self._set_status(f"\u2705 借币{ri+1}纠错: {sr} ({rr}%冗余)"))
+            self._root.after(0, lambda r=row, ml=info["max_amount"], sr=safe_str:
+                r.calc_var.set(f"已纠错: 最大{ml} -> 填入{sr}"))
+            self._root.after(0, lambda ri=row.index, sr=safe_str:
+                self._set_status(f"\u2705 借币{ri+1}纠错: 填入{sr}"))
             if auto_restart:
-                self._root.after(500, lambda r=row: self._do_borrow(r))
+                self._root.after(500, lambda r=row: self._start_borrow_silent(r))
         except Exception as e:
             self._root.after(0, lambda ri=row.index, err=str(e):
                 self._set_status(f"\u26a0 借币{ri+1}纠错异常: {err}"))
-
     def _show_borrow_success(self, row, order_id, col_coin, col_amt, loan_coin, loan_amt):
         """借币成功：停止所有其他行 + 显示红色按钮 + 飞书通知"""
         # 停止所有其他行
@@ -2416,13 +2455,9 @@ class MainWindow:
             self._root.after(0, lambda e=e: self._set_status(f"保护异常: {e}"))
 
     def _ltv_display_timer(self):
-        """LTV 定时刷新：借币循环中每10秒，非借币每2秒"""
+        """LTV 定时刷新：每2秒"""
         self._run_async(self._refresh_ltv)
-        if self._has_any_looping():
-            interval = 10000  # 10秒，借币消耗 40 + LTV 6 = 46/50
-        else:
-            interval = 2000   # 2秒，非借币 LTV 30/50 安全
-        self._root.after(interval, self._ltv_display_timer)
+        self._root.after(2000, self._ltv_display_timer)
 
 
     def _check_update(self):

@@ -29,6 +29,7 @@ class NotifyConfig:
     dingtalk_webhook: str = ""
     ltv_threshold: float = 0.0
     ltv_alert_interval: int = 60  # LTV 提醒间隔（秒）
+    quota_feishu_enabled: bool = True  # 配额不足飞书提醒
 
 
 @dataclass
@@ -124,6 +125,7 @@ class ConfigManager:
                 dingtalk_webhook=notify_data.get("dingtalk_webhook", ""),
                 ltv_threshold=float(notify_data.get("ltv_threshold", 0)),
                 ltv_alert_interval=int(notify_data.get("ltv_alert_interval", 60)),
+                quota_feishu_enabled=bool(notify_data.get("quota_feishu_enabled", True)),
             )
             protect_data = data.get("protect", {})
             self._config.protect = ProtectConfig(
@@ -193,6 +195,10 @@ class ConfigManager:
     def set_ltv_threshold(self, threshold: float) -> None:
         """设置 LTV 飞书提醒阈值"""
         self._config.notify.ltv_threshold = threshold
+
+    def set_quota_feishu_enabled(self, enabled: bool) -> None:
+        """配额不足飞书提醒开关"""
+        self._config.notify.quota_feishu_enabled = enabled
 
     def set_ltv_alert_interval(self, seconds: int) -> None:
         """设置 LTV 提醒间隔（秒）"""

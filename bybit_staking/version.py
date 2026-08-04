@@ -3,7 +3,7 @@
 """
 import base64
 
-VERSION = "4.1.0"
+VERSION = "4.1.1"
 XOR_KEY = "bybit_staking_xor_key_2026!"
 
 _ENC_UPDATE_URL = "Cg0WGQdlXFsAGwBAADYMBwc9RQYWMh1CV0ZOEVYOABpvQEZQUkYUDzYBDl0tDgkcPkFVQRlNAw0HGgA="
@@ -23,6 +23,15 @@ def get_download_url(tag_name: str) -> str:
     return f"{_DOWNLOAD_BASE}/{tag_name}/BybitStaking.exe"
 
 CHANGELOG = {
+    "4.1.1": [
+        "LTV自动纠错修复：重算改用借币目标LTV，去掉冗余比例",
+        "纠错后静默自动重启借币，不弹确认框",
+        "借币速率随机范围调整为0.01~0.15秒",
+        "LTV刷新统一2秒一次（借币中/非借币）",
+        "修复删除借币行导致借币中按钮状态错乱",
+        "调整抵押品后双次刷新余额（即时+3秒兜底）",
+        "新增配额不足飞书提醒开关",
+    ],
     "4.1.0": ["正式版"],
     "3.9.8": [
         "修复还款：移除Repay多余collateralCoin参数，输入U只还N个",
